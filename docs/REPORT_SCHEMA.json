@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "sans report.json",
+  "type": "object",
+  "required": [
+    "status",
+    "exit_code_bucket",
+    "primary_error",
+    "diagnostics",
+    "inputs",
+    "outputs",
+    "plan_path",
+    "engine",
+    "settings",
+    "timing"
+  ],
+  "properties": {
+    "status": {"enum": ["ok", "ok_warnings", "refused", "failed"]},
+    "exit_code_bucket": {"enum": [0, 10, 20, 30, 31, 32, 40, 50]},
+    "primary_error": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/definitions/error"}
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/error"}
+    },
+    "inputs": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/io"}
+    },
+    "outputs": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/io"}
+    },
+    "plan_path": {"type": "string"},
+    "engine": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"}
+      }
+    },
+    "settings": {"type": "object"},
+    "timing": {
+      "type": "object",
+      "required": ["compile_ms", "validate_ms", "execute_ms"],
+      "properties": {
+        "compile_ms": {"type": ["integer", "null"]},
+        "validate_ms": {"type": ["integer", "null"]},
+        "execute_ms": {"type": ["integer", "null"]}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["status", "outputs", "timing"],
+      "properties": {
+        "status": {"enum": ["ok", "refused", "failed"]},
+        "outputs": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/runtime_output"}
+        },
+        "timing": {
+          "type": "object",
+          "required": ["execute_ms"],
+          "properties": {
+            "execute_ms": {"type": ["integer", "null"]}
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "loc": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["file", "line_start", "line_end"],
+          "properties": {
+            "file": {"type": "string"},
+            "line_start": {"type": "integer"},
+            "line_end": {"type": "integer"}
+          }
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "loc"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "loc": {"$ref": "#/definitions/loc"}
+      }
+    },
+    "io": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": ["string", "null"]}
+      }
+    },
+    "runtime_output": {
+      "type": "object",
+      "required": ["path", "table", "rows", "columns"],
+      "properties": {
+        "path": {"type": "string"},
+        "table": {"type": "string"},
+        "rows": {"type": "integer"},
+        "columns": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

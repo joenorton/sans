@@ -1,0 +1,392 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sans.example/schema/sans-ir-0.1.json",
+  "title": "SANS IR v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ir_version", "engine", "source", "settings", "tables", "steps"],
+  "properties": {
+    "ir_version": { "const": "0.1" },
+
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "inputs"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["sas", "dsl", "ir"] },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/SourceInput" }
+        },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict", "null_semantics", "sort", "float_tolerance"],
+      "properties": {
+        "strict": { "type": "boolean" },
+
+        "null_semantics": {
+          "type": "string",
+          "enum": ["three_valued"]
+        },
+
+        "text_encoding": {
+          "type": "string",
+          "minLength": 1,
+          "default": "utf-8"
+        },
+
+        "sort": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stable", "nulls"],
+          "properties": {
+            "stable": { "type": "boolean" },
+            "nulls": { "type": "string", "enum": ["first", "last"] }
+          }
+        },
+
+        "float_tolerance": { "$ref": "#/$defs/FloatTolerance" }
+      }
+    },
+
+    "symbols": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "macros": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      },
+      "default": {}
+    },
+
+    "tables": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/TableDecl" }
+    },
+
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Step" }
+    },
+
+    "assertions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Assertion" },
+      "default": []
+    },
+
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Diagnostic" },
+      "default": []
+    }
+  },
+
+  "$defs": {
+    "SourceInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+      }
+    },
+
+    "FloatTolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "abs", "rel", "abs_or_rel"] },
+        "value": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "enum": ["abs", "rel", "abs_or_rel"] } }, "required": ["mode"] },
+          "then": { "required": ["value"] }
+        }
+      ]
+    },
+
+    "TableDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/TableOrigin" },
+        "schema_hint": { "$ref": "#/$defs/SchemaHint" },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "TableOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["file", "generated"] },
+
+        "path": { "type": "string", "minLength": 1 },
+        "format": { "type": "string", "enum": ["csv", "parquet"] },
+
+        "generated_by_step": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "file" } }, "required": ["kind"] },
+          "then": { "required": ["path", "format"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "generated" } }, "required": ["kind"] },
+          "then": { "required": ["generated_by_step"] }
+        }
+      ]
+    },
+
+    "SchemaHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns"],
+      "properties": {
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ColumnHint" }
+        },
+        "keys_hint": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        }
+      }
+    },
+
+    "ColumnHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "dtype"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "dtype": { "$ref": "#/$defs/DType" },
+        "nullable": { "type": "boolean", "default": true }
+      }
+    },
+
+    "DType": {
+      "type": "string",
+      "enum": ["str", "bool", "i64", "f64", "date", "datetime"]
+    },
+
+    "Loc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line_start", "line_end"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "Soundness": {
+      "type": "string",
+      "enum": ["sound", "approx", "unsupported"]
+    },
+
+    "Step": {
+      "oneOf": [
+        { "$ref": "#/$defs/OpStep" },
+        { "$ref": "#/$defs/UnknownBlockStep" },
+        { "$ref": "#/$defs/NoteStep" }
+      ]
+    },
+
+    "BaseStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["op", "block", "note"] },
+        "loc": { "$ref": "#/$defs/Loc" }
+      }
+    },
+
+    "OpStep": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseStep" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "op", "soundness"],
+          "properties": {
+            "kind": { "const": "op" },
+            "op": { "$ref": "#/$defs/OpName" },
+            "soundness": { "$ref": "#/$defs/Soundness" },
+            "inputs": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "default": []
+            },
+            "outputs": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "default": []
+            },
+            "params": { "type": "object" },
+            "effects": { "$ref": "#/$defs/Effects" }
+          }
+        }
+      ]
+    },
+
+    "OpName": {
+      "type": "string",
+      "enum": [
+        "load",
+        "save",
+        "select",
+        "rename",
+        "cast",
+        "compute",
+        "filter",
+        "sort",
+        "group_agg",
+        "join",
+        "concat_rows",
+        "deduplicate",
+        "compare"
+      ]
+    },
+
+    "Effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/SchemaEffects" },
+        "order": { "type": "string", "enum": ["preserved", "sorted", "unknown"], "default": "unknown" }
+      },
+      "default": {}
+    },
+
+    "SchemaEffects": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+        "drops": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+        "casts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["col", "to"],
+            "properties": {
+              "col": { "type": "string", "minLength": 1 },
+              "to": { "$ref": "#/$defs/DType" }
+            }
+          },
+          "default": []
+        }
+      },
+      "default": {}
+    },
+
+    "UnknownBlockStep": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseStep" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "block_kind", "reason", "severity"],
+          "properties": {
+            "kind": { "const": "block" },
+            "block_kind": { "type": "string", "enum": ["unknown_sas", "unknown_dsl", "unknown_ir"] },
+            "severity": { "type": "string", "enum": ["warn", "fatal"] },
+            "reason": { "$ref": "#/$defs/Reason" },
+            "raw_excerpt": { "type": "string" },
+            "suggested_action": { "type": "string", "enum": ["rewrite_required", "preexpand_required", "unknown"] }
+          }
+        }
+      ]
+    },
+
+    "Reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "tokens": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+
+    "NoteStep": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseStep" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "message"],
+          "properties": {
+            "kind": { "const": "note" },
+            "message": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+
+    "Assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "severity"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["sorted", "unique_keys", "rowcount", "schema_has"] },
+        "severity": { "type": "string", "enum": ["warn", "fatal"] },
+        "table": { "type": "string", "minLength": 1 },
+        "params": { "type": "object" },
+        "loc": { "$ref": "#/$defs/Loc" }
+      }
+    },
+
+    "Diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "code", "message"],
+      "properties": {
+        "level": { "type": "string", "enum": ["info", "warn", "error"] },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "loc": { "$ref": "#/$defs/Loc" }
+      }
+    }
+  }
+}

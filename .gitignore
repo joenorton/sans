@@ -1,0 +1,16 @@
+.pytest_cache/
+.pytest_cache
+__pycache__/
+.benchmarks/
+.tmp_pytest
+
+# builds
+dist/
+sans/build/
+sans/sans.egg-info/
+
+# ouputs
+out/
+
+# archive
+docs/archive/

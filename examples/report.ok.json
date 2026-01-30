@@ -1,0 +1,29 @@
+{
+  "status": "ok",
+  "exit_code_bucket": 0,
+  "primary_error": null,
+  "diagnostics": [],
+  "inputs": [
+    {"path": "script.sas", "sha256": "f5f5fcdde3f1eaf6b2b9a00e3f34ab9d62b01a12f2c88e3cd4fba0db985f6a3e"}
+  ],
+  "outputs": [
+    {"path": "out/plan.ir.json", "sha256": "2a4b3e4c1f8d3b9b9f1caa6a0f6b80a1cbe8f0cd9c1f9d6e6c4b3a2d1e0f9a8b"},
+    {"path": "out/report.json", "sha256": "e4b7d18e2e4b0c7c6a4f6c6c1e7a4a0f02b88b4c4f6a0a8d3b0c9e7a1f2d3c4b"}
+  ],
+  "plan_path": "out/plan.ir.json",
+  "engine": {"name": "sans", "version": "0.1.0"},
+  "settings": {
+    "strict": true,
+    "allow_approx": false,
+    "tolerance": null,
+    "tables": ["in"]
+  },
+  "timing": {"compile_ms": 5, "validate_ms": 2, "execute_ms": 12},
+  "runtime": {
+    "status": "ok",
+    "outputs": [
+      {"table": "out", "path": "out/out.csv", "rows": 2, "columns": ["a", "b", "c"]}
+    ],
+    "timing": {"execute_ms": 12}
+  }
+}

@@ -1,0 +1,78 @@
+[project]
+name = "sans"
+version = "0.1.0"
+description = "A small, deterministic batch execution engine for tabular transformation scripts."
+requires-python = ">=3.9"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+
+# This should be your name or the name of the organization who originally
+# authored the project, and a valid email address corresponding to the name
+# listed.
+authors = [{ name = "Joe Norton", email = "joenortondev@gmail.com" }]
+
+# This should be your name or the names of the organization who currently
+# maintains the project, and a valid email address corresponding to the name
+# listed.
+maintainers = [
+  { name = "Joe Norton", email = "joenortondev@gmail.com" },
+]
+
+keywords = [
+  "sas",
+  "sas-like",
+  "data-steps",
+  "batch-processing",
+  "etl",
+  "data-pipeline",
+  "compiler",
+  "static-analysis",
+  "data-validation",
+  "reproducible",
+  "auditability",
+  "lineage",
+]
+
+classifiers = [
+  "Development Status :: 3 - Alpha",
+
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Healthcare Industry",
+
+  "Topic :: Software Development :: Compilers",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: System :: Logging",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "jsonschema>=4.0",
+]
+
+[project.scripts]
+sans = "sans.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["sans"]
+exclude = ["tests*"]
