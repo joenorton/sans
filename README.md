@@ -14,6 +14,12 @@ Refusal principle: unknown means no. Unsupported constructs refuse the entire bl
 
 Report contract: `docs/REPORT_CONTRACT.md`
 
+Supported subset (current):
+- data steps: `set`/`merge` with assignments, `if`, `keep/drop/rename`, BY-group flags, retain, and dataset options (`keep/drop/rename/where`, `in=` on merge)
+- `proc sort`
+- `proc transpose` (by/id/var)
+- `validate --profile sdtm` (DM/AE/LB rulepack)
+
 ### Minimal example
 ```
 data out;
@@ -37,3 +43,13 @@ Outputs:
 - `out/plan.ir.json`
 - `out/report.json`
 - `out/out.csv`
+
+## Validate (SDTM)
+```
+python -m sans validate --profile sdtm --out out --tables dm=dm.csv,ae=ae.csv,lb=lb.csv
+```
+Outputs:
+- `out/validation.report.json`
+
+## Testing
+Pytest cache is disabled by default on Windows to avoid filesystem permission warnings.

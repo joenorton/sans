@@ -76,3 +76,17 @@ sans = "sans.__main__:main"
 [tool.setuptools.packages.find]
 where = ["sans"]
 exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+cache_dir = ".pytest_cache_dir"
+addopts = "-p no:cacheprovider"
+norecursedirs = [
+  "pytest-cache-files-*",
+  ".pytest_cache",
+  ".pytest_cache_dir",
+  ".benchmarks",
+  "dist",
+  "out",
+  "sans/build",
+  "sans/sans.egg-info",
+]

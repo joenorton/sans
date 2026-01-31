@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import csv
+import re
 from time import perf_counter
 
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
@@ -124,6 +125,67 @@ def _write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
         writer.writerow(headers)
         for row in rows:
             writer.writerow(["" if row.get(h) is None else row.get(h) for h in headers])
+
+
+def _sanitize_column_name(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", text)
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    if not sanitized:
+        sanitized = "COL"
+    if sanitized[0].isdigit():
+        sanitized = f"COL_{sanitized}"
+    return sanitized
+
+
+def _apply_dataset_options(
+    rows: List[Dict[str, Any]],
+    options: Dict[str, Any],
+    loc: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    output_rows = rows
+
+    where_expr = options.get("where")
+    if where_expr is not None:
+        filtered_rows: List[Dict[str, Any]] = []
+        for row in output_rows:
+            keep = _eval_expr(where_expr, row)
+            if bool(keep):
+                filtered_rows.append(row)
+        output_rows = filtered_rows
+
+    keep_cols = options.get("keep")
+    drop_cols = options.get("drop")
+    if keep_cols and drop_cols:
+        raise RuntimeFailure(
+            "SANS_RUNTIME_DATASET_OPTION_CONFLICT",
+            "KEEP and DROP cannot both be specified in dataset options.",
+            loc,
+        )
+
+    if keep_cols:
+        kept_rows: List[Dict[str, Any]] = []
+        for row in output_rows:
+            kept_rows.append({k: row.get(k) for k in keep_cols})
+        output_rows = kept_rows
+    elif drop_cols:
+        dropped_rows: List[Dict[str, Any]] = []
+        for row in output_rows:
+            dropped_rows.append({k: v for k, v in row.items() if k not in drop_cols})
+        output_rows = dropped_rows
+
+    rename_map = options.get("rename") or {}
+    if rename_map:
+        renamed_rows = []
+        for row in output_rows:
+            new_row: Dict[str, Any] = {}
+            for key, value in row.items():
+                new_key = rename_map.get(key, key)
+                new_row[new_key] = value
+            renamed_rows.append(new_row)
+        output_rows = renamed_rows
+
+    return output_rows
 
 
 def _eval_expr(node: Dict[str, Any], row: Dict[str, Any]) -> Any:
@@ -258,7 +320,11 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
         )
 
     if mode == "set":
-        input_rows = tables[input_tables[0]]
+        input_rows = _apply_dataset_options(
+            tables[input_tables[0]],
+            input_specs[0],
+            _loc_to_dict(step.loc),
+        )
         if by_vars and not _check_sorted(input_rows, by_vars):
             raise RuntimeFailure(
                 "SANS_RUNTIME_ORDER_REQUIRED",
@@ -305,7 +371,10 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
                 emit_row(row)
 
     elif mode == "merge":
-        input_rows = [tables[name] for name in input_tables]
+        input_rows = [
+            _apply_dataset_options(tables[name], spec, _loc_to_dict(step.loc))
+            for name, spec in zip(input_tables, input_specs)
+        ]
         for table_name, rows in zip(input_tables, input_rows):
             if by_vars and not _check_sorted(rows, by_vars):
                 raise RuntimeFailure(
@@ -419,6 +488,75 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
     return outputs
 
 
+def _execute_transpose(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    params = step.params or {}
+    by_vars = params.get("by") or []
+    id_var = params.get("id")
+    var_var = params.get("var")
+
+    if not id_var or not var_var:
+        raise RuntimeFailure(
+            "SANS_RUNTIME_TRANSPOSE_MISSING_ARGS",
+            "PROC TRANSPOSE requires ID and VAR options.",
+            _loc_to_dict(step.loc),
+        )
+
+    input_table = step.inputs[0]
+    input_rows = tables.get(input_table, [])
+    if by_vars and not _check_sorted(input_rows, by_vars):
+        raise RuntimeFailure(
+            "SANS_RUNTIME_ORDER_REQUIRED",
+            f"Input table '{input_table}' is not sorted by {by_vars}.",
+            _loc_to_dict(step.loc),
+        )
+
+    outputs: List[Dict[str, Any]] = []
+    id_cols_order: List[str] = []
+    id_col_values: Dict[str, Any] = {}
+
+    current_key = None
+    current_row: Optional[Dict[str, Any]] = None
+
+    def flush_current():
+        if current_row is not None:
+            outputs.append(current_row)
+
+    for row in input_rows:
+        key = tuple(row.get(col) for col in by_vars) if by_vars else ("__all__",)
+        if current_key is None or key != current_key:
+            flush_current()
+            current_key = key
+            current_row = {col: key[idx] for idx, col in enumerate(by_vars)}
+
+        id_val = row.get(id_var)
+        if id_val is None or (isinstance(id_val, str) and id_val.strip() == ""):
+            raise RuntimeFailure(
+                "SANS_RUNTIME_TRANSPOSE_ID_MISSING",
+                f"Missing ID value for column '{id_var}'.",
+                _loc_to_dict(step.loc),
+            )
+        col_name = _sanitize_column_name(id_val)
+        if col_name in id_col_values and id_col_values[col_name] != id_val:
+            raise RuntimeFailure(
+                "SANS_RUNTIME_TRANSPOSE_ID_COLLISION",
+                f"ID value '{id_val}' collides with '{id_col_values[col_name]}' after sanitization.",
+                _loc_to_dict(step.loc),
+            )
+        id_col_values.setdefault(col_name, id_val)
+        if col_name not in id_cols_order:
+            id_cols_order.append(col_name)
+
+        current_row[col_name] = row.get(var_var)
+
+    flush_current()
+
+    columns = list(by_vars) + id_cols_order
+    normalized_rows: List[Dict[str, Any]] = []
+    for row in outputs:
+        normalized_rows.append({col: row.get(col) for col in columns})
+    return normalized_rows
+
+
 def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
@@ -450,7 +588,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                 )
 
             op = step.op
-            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step"}:
+            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose"}:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
                     f"Unsupported operation '{op}'",
@@ -515,6 +653,8 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                     output_rows.append(new_row)
             elif op == "data_step":
                 output_rows = _execute_data_step(step, tables)
+            elif op == "transpose":
+                output_rows = _execute_transpose(step, tables)
             else:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",

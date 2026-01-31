@@ -1,5 +1,7 @@
 .pytest_cache/
 .pytest_cache
+.pytest_cache_dir/
+pytest-cache-files-*/
 __pycache__/
 .benchmarks/
 .tmp_pytest

@@ -3,7 +3,7 @@ import textwrap
 
 from sans.frontend import Statement, Block, split_statements, segment_blocks
 from sans.ir import OpStep, UnknownBlockStep
-from sans.recognizer import recognize_data_block, recognize_proc_sort_block
+from sans.recognizer import recognize_data_block, recognize_proc_sort_block, recognize_proc_transpose_block
 from sans._loc import Loc
 
 # Helper function to create a block.
@@ -190,3 +190,26 @@ def test_recognize_proc_sort_block_malformed_by_statement():
     assert "Malformed BY statement" in step.message
     assert step.severity == "fatal"
     assert step.loc == Loc("test.sas", 2, 2)
+
+
+def test_recognize_proc_transpose_block_happy_path():
+    script = "proc transpose data=lb out=lb_t;\nby subjid;\nid lbtestcd;\nvar lbstresn;\nrun;"
+    block = create_proc_block(script)
+
+    step = recognize_proc_transpose_block(block)
+
+    assert isinstance(step, OpStep)
+    assert step.op == "transpose"
+    assert step.inputs == ["lb"]
+    assert step.outputs == ["lb_t"]
+    assert step.params == {"by": ["subjid"], "id": "lbtestcd", "var": "lbstresn", "last_wins": True}
+
+
+def test_recognize_proc_transpose_block_missing_var():
+    script = "proc transpose data=lb out=lb_t;\nby subjid;\nid lbtestcd;\nrun;"
+    block = create_proc_block(script)
+
+    step = recognize_proc_transpose_block(block)
+
+    assert isinstance(step, UnknownBlockStep)
+    assert step.code == "SANS_PARSE_TRANSPOSE_MISSING_VAR"

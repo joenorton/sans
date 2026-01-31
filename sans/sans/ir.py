@@ -126,6 +126,33 @@ class IRDoc:
                     else:
                         output_sorted_by = input_sorted_by
 
+                elif step.op == "transpose":
+                    by_vars = step.params.get("by") or []
+                    id_var = step.params.get("id")
+                    var_var = step.params.get("var")
+                    if not by_vars:
+                        raise UnknownBlockStep(
+                            code="SANS_VALIDATE_KEYS_REQUIRED",
+                            message="PROC TRANSPOSE requires BY keys.",
+                            loc=step.loc,
+                        )
+                    if not id_var or not var_var:
+                        raise UnknownBlockStep(
+                            code="SANS_VALIDATE_KEYS_REQUIRED",
+                            message="PROC TRANSPOSE requires ID and VAR options.",
+                            loc=step.loc,
+                        )
+                    for input_table in step.inputs:
+                        input_fact = current_table_facts.get(input_table)
+                        input_sorted_by = input_fact.sorted_by if input_fact else None
+                        if not input_sorted_by or input_sorted_by[:len(by_vars)] != by_vars:
+                            raise UnknownBlockStep(
+                                code="SANS_VALIDATE_ORDER_REQUIRED",
+                                message=f"Input table '{input_table}' must be sorted by {by_vars} for PROC TRANSPOSE.",
+                                loc=step.loc,
+                            )
+                    output_sorted_by = list(by_vars)
+
                 elif step.op == "select":
                     # select preserves sortedness if sort keys are not dropped
                     if input_sorted_by is None:

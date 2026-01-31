@@ -35,6 +35,212 @@ def _expr_uses_by_flag(expr: Any) -> bool:
     return False
 
 
+def _split_tokens_outside_parens(text: str) -> list[str]:
+    tokens: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch.isspace() and depth == 0:
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            continue
+        buf.append(ch)
+    if buf:
+        tokens.append("".join(buf))
+    return tokens
+
+
+def _parse_dataset_spec(spec_text: str, loc: Loc, allow_in_flag: bool) -> dict[str, Any] | UnknownBlockStep:
+    s = spec_text.strip()
+    if not s:
+        return UnknownBlockStep(
+            code="SANS_PARSE_DATASET_SPEC_MALFORMED",
+            message="Empty dataset spec.",
+            loc=loc,
+        )
+    name_match = re.match(r"^([a-zA-Z_]\w*)", s)
+    if not name_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_DATASET_SPEC_MALFORMED",
+            message=f"Malformed dataset spec: '{spec_text}'",
+            loc=loc,
+        )
+    table_name = name_match.group(1).lower()
+    idx = name_match.end(1)
+    rest = s[idx:].strip()
+
+    options_text = ""
+    if rest:
+        if not rest.startswith("("):
+            return UnknownBlockStep(
+                code="SANS_PARSE_DATASET_SPEC_MALFORMED",
+                message=f"Malformed dataset options in '{spec_text}'",
+                loc=loc,
+            )
+        depth = 0
+        end_idx = None
+        for j, ch in enumerate(rest):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    end_idx = j
+                    break
+        if end_idx is None:
+            return UnknownBlockStep(
+                code="SANS_PARSE_DATASET_SPEC_MALFORMED",
+                message=f"Unclosed dataset options in '{spec_text}'",
+                loc=loc,
+            )
+        options_text = rest[1:end_idx].strip()
+        trailing = rest[end_idx + 1:].strip()
+        if trailing:
+            return UnknownBlockStep(
+                code="SANS_PARSE_DATASET_SPEC_MALFORMED",
+                message=f"Unexpected text after dataset options in '{spec_text}'",
+                loc=loc,
+            )
+
+    spec: dict[str, Any] = {
+        "table": table_name,
+        "in": None,
+        "keep": None,
+        "drop": None,
+        "rename": None,
+        "where": None,
+    }
+
+    if not options_text:
+        return spec
+
+    tokens = _split_tokens_outside_parens(options_text)
+    known_options = {"keep", "drop", "rename", "where", "in"}
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if "=" not in token:
+            return UnknownBlockStep(
+                code="SANS_PARSE_DATASET_OPTION_UNKNOWN",
+                message=f"Unknown dataset option token '{token}' in '{spec_text}'",
+                loc=loc,
+            )
+        key, value = token.split("=", 1)
+        key_lower = key.lower()
+        if key_lower not in known_options:
+            return UnknownBlockStep(
+                code="SANS_PARSE_DATASET_OPTION_UNKNOWN",
+                message=f"Unknown dataset option '{key}' in '{spec_text}'",
+                loc=loc,
+            )
+
+        if key_lower == "in":
+            if not allow_in_flag:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_DATASET_OPTION_UNKNOWN",
+                    message=f"IN= option not allowed here: '{spec_text}'",
+                    loc=loc,
+                )
+            if not value:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_DATASET_OPTION_MALFORMED",
+                    message=f"Malformed IN= option in '{spec_text}'",
+                    loc=loc,
+                )
+            spec["in"] = value
+            i += 1
+            continue
+
+        if key_lower in {"keep", "drop"}:
+            if key_lower == "keep" and spec["drop"]:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_DATASET_OPTION_MALFORMED",
+                    message="KEEP and DROP cannot both be specified in dataset options.",
+                    loc=loc,
+                )
+            if key_lower == "drop" and spec["keep"]:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_DATASET_OPTION_MALFORMED",
+                    message="KEEP and DROP cannot both be specified in dataset options.",
+                    loc=loc,
+                )
+            values: list[str] = []
+            if value:
+                if value.startswith("(") and value.endswith(")"):
+                    inner = value[1:-1].strip()
+                    values.extend([v for v in re.split(r"\s+", inner) if v])
+                    i += 1
+                else:
+                    values.append(value)
+                    i += 1
+                    while i < len(tokens):
+                        nxt = tokens[i]
+                        if "=" in nxt and nxt.split("=", 1)[0].lower() in known_options:
+                            break
+                        values.append(nxt)
+                        i += 1
+            else:
+                i += 1
+                while i < len(tokens):
+                    nxt = tokens[i]
+                    if "=" in nxt and nxt.split("=", 1)[0].lower() in known_options:
+                        break
+                    values.append(nxt)
+                    i += 1
+            spec[key_lower] = values
+            continue
+
+        if key_lower == "rename":
+            if not value or not (value.startswith("(") and value.endswith(")")):
+                return UnknownBlockStep(
+                    code="SANS_PARSE_DATASET_OPTION_MALFORMED",
+                    message=f"Malformed RENAME option in '{spec_text}'",
+                    loc=loc,
+                )
+            inner = value[1:-1].strip()
+            rename_map: dict[str, str] = {}
+            for pair in re.split(r"\s+", inner):
+                if not pair:
+                    continue
+                parts = pair.split("=")
+                if len(parts) != 2:
+                    return UnknownBlockStep(
+                        code="SANS_PARSE_DATASET_OPTION_MALFORMED",
+                        message=f"Malformed RENAME pair '{pair}' in '{spec_text}'",
+                        loc=loc,
+                    )
+                rename_map[parts[0]] = parts[1]
+            spec["rename"] = rename_map
+            i += 1
+            continue
+
+        if key_lower == "where":
+            if not value or not (value.startswith("(") and value.endswith(")")):
+                return UnknownBlockStep(
+                    code="SANS_PARSE_DATASET_OPTION_MALFORMED",
+                    message=f"Malformed WHERE option in '{spec_text}'",
+                    loc=loc,
+                )
+            inner = value[1:-1].strip()
+            try:
+                spec["where"] = parse_expression_from_string(inner, loc.file)
+            except ValueError as e:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_EXPRESSION_ERROR",
+                    message=f"Error parsing WHERE predicate: {e}",
+                    loc=loc,
+                )
+            i += 1
+            continue
+
+    return spec
+
+
 def _is_stateful_data_step(block: Block) -> bool:
     for stmt in block.body:
         s = stmt.text.strip().lower()
@@ -79,7 +285,7 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
         )]
     final_output_table = header_match.group(1)
 
-    # 2. Parse set statement: set <in>;
+    # 2. Parse set statement: set <in>(options);
     set_statements = [s for s in block.body if s.text.lower().startswith("set")]
     if len(set_statements) != 1:
         return [UnknownBlockStep(
@@ -88,14 +294,18 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
             loc=block.loc_span,
         )]
     set_stmt = set_statements[0]
-    set_match = re.match(r"set\s+(\S+)", set_stmt.text.lower())
+    set_match = re.match(r"set\s+(.+)$", set_stmt.text, re.IGNORECASE)
     if not set_match:
         return [UnknownBlockStep(
             code="SANS_PARSE_SET_STATEMENT_MALFORMED",
             message=f"Malformed SET statement: '{set_stmt.text}'",
             loc=set_stmt.loc,
         )]
-    current_input_table = set_match.group(1)
+    set_spec_text = set_match.group(1).strip()
+    set_spec = _parse_dataset_spec(set_spec_text, set_stmt.loc, allow_in_flag=False)
+    if isinstance(set_spec, UnknownBlockStep):
+        return [set_spec]
+    current_input_table = set_spec["table"]
 
     # Hard fail for forbidden tokens (statement-leading keywords only)
     def find_forbidden_token(stmt_text: str) -> Optional[str]:
@@ -156,6 +366,39 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
 
     # Initialize pipeline with the input table from SET statement
     pipeline_input_table = current_input_table
+    # Apply dataset options at read-time (where -> keep/drop -> rename)
+    if set_spec.get("where"):
+        pipeline_output_table = generate_temp_output()
+        steps.append(OpStep(
+            op="filter",
+            inputs=[pipeline_input_table],
+            outputs=[pipeline_output_table],
+            params={"predicate": set_spec["where"]},
+            loc=set_stmt.loc,
+        ))
+        pipeline_input_table = pipeline_output_table
+
+    if set_spec.get("keep") or set_spec.get("drop"):
+        pipeline_output_table = generate_temp_output()
+        steps.append(OpStep(
+            op="select",
+            inputs=[pipeline_input_table],
+            outputs=[pipeline_output_table],
+            params={"keep": set_spec.get("keep") or [], "drop": set_spec.get("drop") or []},
+            loc=set_stmt.loc,
+        ))
+        pipeline_input_table = pipeline_output_table
+
+    if set_spec.get("rename"):
+        pipeline_output_table = generate_temp_output()
+        steps.append(OpStep(
+            op="rename",
+            inputs=[pipeline_input_table],
+            outputs=[pipeline_output_table],
+            params={"map": set_spec["rename"]},
+            loc=set_stmt.loc,
+        ))
+        pipeline_input_table = pipeline_output_table
     
     # Process body statements in canonical order: rename, compute, filter, select
     
@@ -402,14 +645,18 @@ def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockSt
     if set_statements:
         mode = "set"
         set_stmt = set_statements[0]
-        set_match = re.match(r"set\s+(\S+)", set_stmt.text.lower())
+        set_match = re.match(r"set\s+(.+)$", set_stmt.text, re.IGNORECASE)
         if not set_match:
             return [UnknownBlockStep(
                 code="SANS_PARSE_SET_STATEMENT_MALFORMED",
                 message=f"Malformed SET statement: '{set_stmt.text}'",
                 loc=set_stmt.loc,
             )]
-        input_specs.append({"table": set_match.group(1), "in": None})
+        set_spec_text = set_match.group(1).strip()
+        set_spec = _parse_dataset_spec(set_spec_text, set_stmt.loc, allow_in_flag=False)
+        if isinstance(set_spec, UnknownBlockStep):
+            return [set_spec]
+        input_specs.append(set_spec)
     else:
         mode = "merge"
         merge_stmt = merge_statements[0]
@@ -421,48 +668,24 @@ def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockSt
                 message=f"Malformed MERGE statement: '{merge_stmt.text}'",
                 loc=merge_stmt.loc,
             )]
-        parts = re.split(r"\s+", merge_body)
+        parts = _split_tokens_outside_parens(merge_body)
         in_flags: set[str] = set()
         for part in parts:
             if not part:
                 continue
-            match = re.match(r"^([a-zA-Z_]\w*)(\(([^)]*)\))?$", part)
-            if not match:
-                return [UnknownBlockStep(
-                    code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
-                    message=f"Malformed MERGE dataset spec: '{part}'",
-                    loc=merge_stmt.loc,
-                )]
-            table_name = match.group(1)
-            opts = match.group(3)
-            in_flag = None
-            if opts:
-                opts_parts = [p for p in re.split(r"\s+", opts.strip()) if p]
-                for opt in opts_parts:
-                    opt_lower = opt.lower()
-                    if opt_lower.startswith("in="):
-                        flag = opt.split("=", 1)[1].strip()
-                        if not flag:
-                            return [UnknownBlockStep(
-                                code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
-                                message=f"Malformed IN= option in MERGE: '{opt}'",
-                                loc=merge_stmt.loc,
-                            )]
-                        if flag in in_flags:
-                            return [UnknownBlockStep(
-                                code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
-                                message=f"Duplicate IN= flag '{flag}' in MERGE.",
-                                loc=merge_stmt.loc,
-                            )]
-                        in_flags.add(flag)
-                        in_flag = flag
-                    else:
-                        return [UnknownBlockStep(
-                            code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
-                            message=f"Unsupported MERGE option '{opt}'",
-                            loc=merge_stmt.loc,
-                        )]
-            input_specs.append({"table": table_name, "in": in_flag})
+            spec = _parse_dataset_spec(part, merge_stmt.loc, allow_in_flag=True)
+            if isinstance(spec, UnknownBlockStep):
+                return [spec]
+            if spec.get("in"):
+                flag = spec["in"]
+                if flag in in_flags:
+                    return [UnknownBlockStep(
+                        code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
+                        message=f"Duplicate IN= flag '{flag}' in MERGE.",
+                        loc=merge_stmt.loc,
+                    )]
+                in_flags.add(flag)
+            input_specs.append(spec)
 
     by_vars: list[str] = []
     if by_statements:
@@ -824,5 +1047,126 @@ def recognize_proc_sort_block(block: Block) -> OpStep | UnknownBlockStep:
         inputs=[input_table],
         outputs=[output_table],
         params={"by": [{"col": v, "asc": True} for v in by_vars]},
+        loc=block.loc_span,
+    )
+
+
+def recognize_proc_transpose_block(block: Block) -> OpStep | UnknownBlockStep:
+    if not block.header.text.lower().startswith("proc transpose"):
+        return UnknownBlockStep(
+            code="SANS_PARSE_INVALID_PROC_TRANSPOSE_HEADER",
+            message=f"Expected PROC TRANSPOSE block to start with 'proc transpose', got '{block.header.text}'",
+            loc=block.header.loc,
+        )
+
+    header_lower = block.header.text.lower()
+    data_match = re.search(r"data\s*=\s*(\S+)", header_lower)
+    out_match = re.search(r"out\s*=\s*(\S+)", header_lower)
+
+    input_table = data_match.group(1) if data_match else None
+    output_table = out_match.group(1) if out_match else None
+
+    header_options_str = header_lower[len("proc transpose"):].strip()
+    header_words = re.findall(r'(\S+)', header_options_str)
+    supported_keywords = ["data=", "out="]
+
+    unsupported_options = []
+    for word in header_words:
+        is_supported = False
+        for sk in supported_keywords:
+            if word.startswith(sk):
+                is_supported = True
+                break
+        if not is_supported:
+            unsupported_options.append(word)
+    if unsupported_options:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_UNSUPPORTED_OPTION",
+            message=f"Unsupported options in PROC TRANSPOSE header: {', '.join(unsupported_options)}",
+            loc=block.header.loc,
+        )
+
+    if not input_table:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_MISSING_DATA",
+            message="PROC TRANSPOSE requires a DATA= option.",
+            loc=block.header.loc,
+        )
+    if not output_table:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_MISSING_OUT",
+            message="PROC TRANSPOSE requires an OUT= option.",
+            loc=block.header.loc,
+        )
+
+    by_statements = [s for s in block.body if s.text.lower().startswith("by ")]
+    id_statements = [s for s in block.body if s.text.lower().startswith("id ")]
+    var_statements = [s for s in block.body if s.text.lower().startswith("var ")]
+
+    if len(by_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_MISSING_BY",
+            message="PROC TRANSPOSE requires exactly one BY statement.",
+            loc=block.loc_span,
+        )
+    if len(id_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_MISSING_ID",
+            message="PROC TRANSPOSE requires exactly one ID statement.",
+            loc=block.loc_span,
+        )
+    if len(var_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_MISSING_VAR",
+            message="PROC TRANSPOSE requires exactly one VAR statement.",
+            loc=block.loc_span,
+        )
+
+    by_match = re.match(r"by\s+(.+)", by_statements[0].text.lower())
+    if not by_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_BY_MALFORMED",
+            message=f"Malformed BY statement: '{by_statements[0].text}'",
+            loc=by_statements[0].loc,
+        )
+    by_vars = [v for v in re.split(r'\s+', by_match.group(1).strip()) if v]
+
+    id_match = re.match(r"id\s+(\S+)", id_statements[0].text.lower())
+    if not id_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_ID_MALFORMED",
+            message=f"Malformed ID statement: '{id_statements[0].text}'",
+            loc=id_statements[0].loc,
+        )
+    id_var = id_match.group(1)
+
+    var_match = re.match(r"var\s+(\S+)", var_statements[0].text.lower())
+    if not var_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_VAR_MALFORMED",
+            message=f"Malformed VAR statement: '{var_statements[0].text}'",
+            loc=var_statements[0].loc,
+        )
+    var_var = var_match.group(1)
+
+    other_statements_in_body = [
+        s for s in block.body
+        if not s.text.lower().startswith("by ")
+        and not s.text.lower().startswith("id ")
+        and not s.text.lower().startswith("var ")
+        and s.text.lower() != "run"
+    ]
+    if other_statements_in_body:
+        return UnknownBlockStep(
+            code="SANS_PARSE_TRANSPOSE_UNSUPPORTED_BODY_STATEMENT",
+            message="PROC TRANSPOSE contains unsupported statements in its body.",
+            loc=block.loc_span,
+        )
+
+    return OpStep(
+        op="transpose",
+        inputs=[input_table],
+        outputs=[output_table],
+        params={"by": by_vars, "id": id_var, "var": var_var, "last_wins": True},
         loc=block.loc_span,
     )

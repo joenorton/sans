@@ -7,6 +7,7 @@ Purpose
 Scope (v0.1)
 - `data ...; set/merge ...; ... run;`
 - `proc sort data=... out=...; by ...; run;`
+- `proc transpose data=... out=...; by ...; id ...; var ...; run;`
 
 Block segmentation (summary)
 - Blocks start at `data` or `proc` statements.
@@ -16,7 +17,7 @@ Block segmentation (summary)
 Data step: supported skeletons
 
 1) Simple (stateless) data step
-- Exactly one `set <input_table>;` in the body.
+- Exactly one `set <input_table>(options);` in the body.
 - Optional statements (at most one each):
   - `keep ...;` or `drop ...;`
   - `rename old=new ...;`
@@ -31,7 +32,7 @@ Data step: supported skeletons
 - If operations exist and there is no `if`, the final step output is rewritten to the data step's target table (no extra identity op).
 
 2) Stateful data step (BY-group / MERGE subset)
-- Exactly one `set <table>;` or `merge <t1>(in=flag) <t2>(in=flag) ...;`
+- Exactly one `set <table>(options);` or `merge <t1>(in=flag options) <t2>(in=flag options) ...;`
 - Optional statements:
   - `by <keys...>;` (required if `merge` or any `first./last.` usage)
   - `retain <vars...>;` (persist values across rows)
@@ -43,6 +44,11 @@ Data step: supported skeletons
   - `output;`
 - Statements execute in order (no canonical reordering).
 - `first.<key>` and `last.<key>` are available in expressions when BY is active.
+
+Dataset options (SET/MERGE inputs)
+- Supported: `keep=`, `drop=`, `rename=(a=b c=d)`, `where=(expr)`, and `in=` (MERGE only).
+- Options apply at read-time to that input stream (where -> keep/drop -> rename).
+- Unknown options refuse the data step.
 
 Forbidden tokens inside data step bodies
 - The recognizer rejects statements that begin with:
@@ -61,3 +67,8 @@ Proc sort pattern (v0.1)
 - Exactly one `by` statement in the body.
 - Any other body statement is refused.
 - Missing `by` is a parse refusal (`SANS_PARSE_SORT_MISSING_BY`).
+
+Proc transpose pattern (v0.1)
+- Header requires `data=` and `out=`; any other header option is refused.
+- Exactly one each: `by`, `id`, `var` statements.
+- Rows are grouped by BY keys; ID values become columns; VAR provides values.

@@ -6,7 +6,7 @@ from pathlib import Path
 from time import perf_counter
 
 from .frontend import detect_refusal, split_statements, segment_blocks, Block
-from .recognizer import recognize_data_block, recognize_proc_sort_block
+from .recognizer import recognize_data_block, recognize_proc_sort_block, recognize_proc_transpose_block
 from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
 from . import __version__ as _engine_version
 
@@ -142,6 +142,9 @@ def compile_script(
             # For now, only 'proc sort' is supported. Refuse others.
             if block.header.text.lower().startswith("proc sort"):
                 step = recognize_proc_sort_block(block)
+                ir_steps.append(step)
+            elif block.header.text.lower().startswith("proc transpose"):
+                step = recognize_proc_transpose_block(block)
                 ir_steps.append(step)
             else:
                 proc_stmt_text = block.header.text

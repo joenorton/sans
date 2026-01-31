@@ -44,6 +44,14 @@ Data step op (stateful subset)
   - BY groups compute `first.<key>` / `last.<key>` flags.
   - `merge` sets `in=` flags per input dataset.
 
+Transpose op (minimal subset)
+- Op name: `transpose`
+- Params:
+  - `by`: list of BY keys
+  - `id`: ID column name
+  - `var`: value column name
+  - `last_wins`: bool (when duplicate ID appears within a BY group)
+
 Determinism rules (v0.1)
 - `sort` is stable; null ordering is explicit in runtime settings.
 - Group output ordering (if/when added) must be explicit.

@@ -189,9 +189,11 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 * data step `set` with:
 
   * assignments, keep/drop/rename, filter-only `if`, limited `if-then-else` assignment
+  * dataset options on inputs: `keep/drop/rename/where`
 * stateful data step subset:
 
   * `set`/`merge` with `by`, `retain`, `first./last.`, `output`, `if/then/else`, `keep`, and `in=` flags
+* `proc transpose` (by/id/var)
 * `proc compare` with `id` required
 * `proc means` basic stats via `class/var` (strict allowlist)
 * `proc freq` minimal (one-way) if you must; otherwise defer

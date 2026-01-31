@@ -822,6 +822,343 @@ def test_run_missing_arithmetic_yields_missing(tmp_path):
     ]
 
 
+def test_run_dataset_options_applied_at_read_time(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["a", "b", "c"],
+            ["1", "10", "x"],
+            ["2", "20", "y"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in(where=(a >= 2) keep=a b rename=(a=x));",
+            "  keep x;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="dataset_opts.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["x"]
+    assert rows[1:] == [["2"]]
+
+
+def test_run_proc_transpose_last_wins(tmp_path):
+    in_csv = tmp_path / "lb.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["subjid", "lbdtc", "lbtestcd", "lbstresn"],
+            ["101", "2023-01-10", "GLUC", "95"],
+            ["101", "2023-01-12", "GLUC", "110"],
+            ["101", "2023-01-12", "ALT", "44"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=lb out=lb_s;",
+            "  by subjid lbdtc;",
+            "run;",
+            "proc transpose data=lb_s out=lb_wide;",
+            "  by subjid;",
+            "  id lbtestcd;",
+            "  var lbstresn;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="transpose_last.sas",
+        bindings={"lb": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "lb_wide.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["subjid", "GLUC", "ALT"]
+    assert rows[1:] == [["101", "110", "44"]]
+
+
+def test_run_merge_dataset_where_option(tmp_path):
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    _write_csv(
+        a_csv,
+        [
+            ["id", "aval"],
+            ["1", "0"],
+            ["1", "1"],
+        ],
+    )
+    _write_csv(
+        b_csv,
+        [
+            ["id", "bval"],
+            ["1", "100"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=a out=a_s;",
+            "  by id;",
+            "run;",
+            "proc sort data=b out=b_s;",
+            "  by id;",
+            "run;",
+            "data out;",
+            "  merge a_s(where=(aval > 0)) b_s;",
+            "  by id;",
+            "  keep id aval bval;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="merge_where.sas",
+        bindings={"a": str(a_csv), "b": str(b_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "aval", "bval"]
+    assert rows[1:] == [["1", "1", "100"]]
+
+
+def test_run_dataset_options_drop_and_rename(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["a", "b", "c"],
+            ["1", "10", "x"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in(drop=c rename=(a=x));",
+            "  keep x b;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="drop_rename.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["x", "b"]
+    assert rows[1:] == [["1", "10"]]
+
+
+def test_run_dataset_where_string_and_missing(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "grp"],
+            ["1", ""],
+            ["2", "A"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in(where=(grp = \"A\"));",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="where_string.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "grp"]
+    assert rows[1:] == [["2", "A"]]
+
+
+def test_run_transpose_id_missing_fails(tmp_path):
+    in_csv = tmp_path / "lb.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["subjid", "lbtestcd", "lbstresn"],
+            ["101", "", "10"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=lb out=lb_s;",
+            "  by subjid;",
+            "run;",
+            "proc transpose data=lb_s out=lb_wide;",
+            "  by subjid;",
+            "  id lbtestcd;",
+            "  var lbstresn;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="transpose_missing_id.sas",
+        bindings={"lb": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "failed"
+    assert report["primary_error"]["code"] == "SANS_RUNTIME_TRANSPOSE_ID_MISSING"
+
+
+def test_run_transpose_id_collision_fails(tmp_path):
+    in_csv = tmp_path / "lb.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["subjid", "lbtestcd", "lbstresn"],
+            ["101", "A-B", "10"],
+            ["101", "A_B", "11"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=lb out=lb_s;",
+            "  by subjid;",
+            "run;",
+            "proc transpose data=lb_s out=lb_wide;",
+            "  by subjid;",
+            "  id lbtestcd;",
+            "  var lbstresn;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="transpose_collision.sas",
+        bindings={"lb": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "failed"
+    assert report["primary_error"]["code"] == "SANS_RUNTIME_TRANSPOSE_ID_COLLISION"
+
+
+def test_run_merge_mixed_dataset_options(tmp_path):
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    _write_csv(
+        a_csv,
+        [
+            ["id", "aval", "extra"],
+            ["1", "10", "x"],
+        ],
+    )
+    _write_csv(
+        b_csv,
+        [
+            ["id", "bval"],
+            ["1", "100"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=a out=a_s;",
+            "  by id;",
+            "run;",
+            "proc sort data=b out=b_s;",
+            "  by id;",
+            "run;",
+            "data out;",
+            "  merge a_s(keep=id aval) b_s(drop=bval);",
+            "  by id;",
+            "  keep id aval;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="merge_mixed_opts.sas",
+        bindings={"a": str(a_csv), "b": str(b_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "aval"]
+    assert rows[1:] == [["1", "10"]]
+
+
 def test_run_unsorted_by_fails_in_runtime(tmp_path):
     in_csv = tmp_path / "in.csv"
     _write_csv(

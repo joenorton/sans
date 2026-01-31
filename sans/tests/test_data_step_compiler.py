@@ -139,6 +139,43 @@ class TestDataStepCompiler:
         assert filter_step.params["predicate"] == binop(">", col("a"), lit(10))
         assert filter_step.loc == L("test.sas", 2, 5)
 
+    def test_data_step_with_dataset_options(self):
+        script = textwrap.dedent("""
+            data out;
+              set in(where=(a > 0) keep=a b rename=(a=x));
+              y = x + 1;
+            run;
+        """)
+        irdoc = check_script(script, "test.sas", tables={"in"})
+        assert isinstance(irdoc, IRDoc)
+        assert len(irdoc.steps) == 4
+
+        assert irdoc.steps[0].op == "filter"
+        assert irdoc.steps[1].op == "select"
+        assert irdoc.steps[2].op == "rename"
+        assert irdoc.steps[3].op == "compute"
+        assert irdoc.steps[3].outputs == ["out"]
+
+    def test_data_step_unknown_dataset_option_refused(self):
+        script = textwrap.dedent("""
+            data out;
+              set in(foo=bar);
+            run;
+        """)
+        with pytest.raises(UnknownBlockStep) as exc_info:
+            check_script(script, "test.sas", tables={"in"})
+        assert exc_info.value.code == "SANS_PARSE_DATASET_OPTION_UNKNOWN"
+
+    def test_data_step_dataset_option_case_normalized(self):
+        script = textwrap.dedent("""
+            data out;
+              set IN(where=(A > 0));
+              keep a;
+            run;
+        """)
+        irdoc = check_script(script, "test.sas", tables={"in"})
+        assert irdoc.steps[0].inputs == ["in"]
+
     def test_data_step_all_operations_canonical_order(self):
         script = textwrap.dedent("""
             data final_out;
