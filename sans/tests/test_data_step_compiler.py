@@ -419,14 +419,14 @@ class TestDataStepCompiler:
     # --- Proc Sort Tests ---
     def test_proc_sort_unsupported_option(self):
         script = textwrap.dedent("""
-            proc sort data=in out=out nodupkey;
+            proc sort data=in out=out dupout=dups;
               by col1;
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
             check_script(script, "test.sas", tables={"in"})
         assert exc_info.value.code == "SANS_PARSE_SORT_UNSUPPORTED_OPTION"
-        assert "Unsupported options in PROC SORT header: nodupkey" in exc_info.value.message
+        assert "Unsupported options in PROC SORT header: dupout=dups" in exc_info.value.message
         assert exc_info.value.loc == L("test.sas", 2, 2)
 
     def test_proc_sort_missing_by(self):

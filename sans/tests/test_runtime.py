@@ -104,7 +104,7 @@ def test_run_proc_sort_ok(tmp_path):
     ]
 
 
-def test_run_unsupported_expr_node_fails(tmp_path):
+def test_run_coalesce_ok(tmp_path):
     in_csv = tmp_path / "in.csv"
     _write_csv(
         in_csv,
@@ -131,8 +131,14 @@ def test_run_unsupported_expr_node_fails(tmp_path):
         strict=True,
     )
 
-    assert report["status"] == "failed"
-    assert report["primary_error"]["code"] == "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE"
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["a", "b", "c"]
+    assert rows[1:] == [
+        ["1", "10", "1"],
+    ]
 
 
 def test_run_missing_input_file_fails(tmp_path):

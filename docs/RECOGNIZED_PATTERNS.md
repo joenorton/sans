@@ -6,9 +6,11 @@ Purpose
 
 Scope (v0.1)
 - `data ...; set/merge ...; ... run;`
-- `proc sort data=... out=...; by ...; run;`
+- `proc sort data=... out=... [nodupkey]; by ...; run;`
 - `proc transpose data=... out=...; by ...; id ...; var ...; run;`
 - `proc sql; create table ... as select ... from ... [join ...] [where ...] [group by ...]; quit;`
+- `proc format; value ...; run;`
+- `proc summary data=... nway; class ...; var ...; output out=... mean= / autoname; run;`
 
 Block segmentation (summary)
 - Blocks start at `data` or `proc` statements.
@@ -64,10 +66,11 @@ Refusal diagnostics (data step)
 - Extra or unknown statements -> `SANS_PARSE_UNSUPPORTED_DATASTEP_FORM` at the data-step block span.
 
 Proc sort pattern (v0.1)
-- Header requires `data=` and `out=`; any other header option is refused.
+- Header requires `data=` and `out=`; allowed header option: `nodupkey`.
 - Exactly one `by` statement in the body.
 - Any other body statement is refused.
 - Missing `by` is a parse refusal (`SANS_PARSE_SORT_MISSING_BY`).
+- `nodupkey` keeps the last row per BY key after stable sort.
 
 Proc transpose pattern (v0.1)
 - Header requires `data=` and `out=`; any other header option is refused.
@@ -80,3 +83,14 @@ Proc sql pattern (v0.1)
 - Optional `where` and `group by` clauses.
 - Select list supports column refs + aggregates (count/sum/min/max/avg).
 - Group-by rule: non-aggregate select columns must appear in GROUP BY.
+
+Proc format pattern (v0.1)
+- Header must be `proc format;`
+- Body supports one or more `value <name> ...;` statements only.
+- Mapping pairs: `"A"="B"` and `other="..."` (default).
+- Compiles to `format` ops that register lookup maps for `put()` calls.
+
+Proc summary pattern (v0.1)
+- Header requires `data=` and `nway`.
+- Exactly one each: `class`, `var`, and `output out=... mean= / autoname`.
+- Produces group means per CLASS keys, output ordered by keys.

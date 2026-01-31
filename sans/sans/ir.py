@@ -160,6 +160,13 @@ class IRDoc:
                     else:
                         output_sorted_by = None
 
+                elif step.op == "summary":
+                    class_vars = step.params.get("class") or []
+                    output_sorted_by = list(class_vars) if class_vars else None
+
+                elif step.op == "format":
+                    output_sorted_by = None
+
                 elif step.op == "select":
                     # select preserves sortedness if sort keys are not dropped
                     if input_sorted_by is None:

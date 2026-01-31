@@ -70,7 +70,7 @@ def _normalize_sort_by(by_spec: Any) -> list[tuple[str, bool]]:
     return [(col, True) for col in by_spec]
 
 
-def _sort_rows(rows: List[Dict[str, Any]], by_spec: Any) -> List[Dict[str, Any]]:
+def _sort_rows(rows: List[Dict[str, Any]], by_spec: Any, nodupkey: bool = False) -> List[Dict[str, Any]]:
     by_cols = _normalize_sort_by(by_spec)
     if not by_cols:
         return [dict(r) for r in rows]
@@ -82,7 +82,20 @@ def _sort_rows(rows: List[Dict[str, Any]], by_spec: Any) -> List[Dict[str, Any]]
             )
     def sort_key(row: Dict[str, Any]):
         return tuple(_sort_key_value(row.get(col)) for col, _ in by_cols)
-    return sorted([dict(r) for r in rows], key=sort_key)
+    sorted_rows = sorted([dict(r) for r in rows], key=sort_key)
+    if not nodupkey:
+        return sorted_rows
+
+    deduped: List[Dict[str, Any]] = []
+    last_key: Optional[tuple[Any, ...]] = None
+    for row in sorted_rows:
+        key = tuple(row.get(col) for col, _ in by_cols)
+        if last_key is not None and key == last_key:
+            deduped[-1] = row  # Keep last row for duplicate key
+        else:
+            deduped.append(row)
+            last_key = key
+    return deduped
 
 
 def _check_sorted(rows: List[Dict[str, Any]], by_cols: list[str]) -> bool:
@@ -142,6 +155,7 @@ def _apply_dataset_options(
     rows: List[Dict[str, Any]],
     options: Dict[str, Any],
     loc: Optional[Dict[str, Any]],
+    formats: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     output_rows = rows
 
@@ -149,7 +163,7 @@ def _apply_dataset_options(
     if where_expr is not None:
         filtered_rows: List[Dict[str, Any]] = []
         for row in output_rows:
-            keep = _eval_expr(where_expr, row)
+            keep = _eval_expr(where_expr, row, formats)
             if bool(keep):
                 filtered_rows.append(row)
         output_rows = filtered_rows
@@ -188,16 +202,104 @@ def _apply_dataset_options(
     return output_rows
 
 
-def _eval_expr(node: Dict[str, Any], row: Dict[str, Any]) -> Any:
+def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict[str, Dict[str, Any]]] = None) -> Any:
     node_type = node.get("type")
     if node_type == "lit":
         return node.get("value")
     if node_type == "col":
         return row.get(node.get("name"))
+    if node_type == "call":
+        name = node.get("name")
+        args = node.get("args") or []
+        if name == "coalesce":
+            for arg in args:
+                val = _eval_expr(arg, row, formats)
+                if val is not None:
+                    return val
+            return None
+        if name == "if":
+            if len(args) != 3:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+                    "IF() requires three arguments.",
+                )
+            predicate = _eval_expr(args[0], row, formats)
+            return _eval_expr(args[1], row, formats) if bool(predicate) else _eval_expr(args[2], row, formats)
+        if name == "put":
+            if len(args) != 2:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+                    "PUT() requires two arguments.",
+                )
+            value = _eval_expr(args[0], row, formats)
+            fmt_node = args[1]
+            fmt_name = None
+            if isinstance(fmt_node, dict) and fmt_node.get("type") == "lit" and isinstance(fmt_node.get("value"), str):
+                fmt_name = fmt_node.get("value")
+            elif isinstance(fmt_node, dict) and fmt_node.get("type") == "col":
+                fmt_name = fmt_node.get("name")
+            if not fmt_name:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_FORMAT_UNSUPPORTED",
+                    "PUT() requires a literal format name (e.g., $sev.).",
+                )
+            fmt_name = fmt_name.lower()
+            if fmt_name.endswith("."):
+                fmt_name = fmt_name[:-1]
+            if not formats or fmt_name not in formats:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_FORMAT_UNDEFINED",
+                    f"Unknown format '{fmt_name}'.",
+                )
+            fmt = formats[fmt_name]
+            mapping = fmt.get("map", {})
+            default = fmt.get("other")
+            if value is None:
+                return default
+            return mapping.get(str(value), default)
+        if name == "input":
+            if len(args) != 2:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+                    "INPUT() requires two arguments.",
+                )
+            value = _eval_expr(args[0], row, formats)
+            informat_node = args[1]
+            informat = None
+            if isinstance(informat_node, dict) and informat_node.get("type") == "lit" and isinstance(informat_node.get("value"), str):
+                informat = informat_node.get("value")
+            elif isinstance(informat_node, dict) and informat_node.get("type") == "col":
+                informat = informat_node.get("name")
+            if not informat:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_INFORMAT_UNSUPPORTED",
+                    "INPUT() requires a literal informat (e.g., best.).",
+                )
+            informat = informat.lower()
+            if informat.endswith("."):
+                informat = informat[:-1]
+            if informat != "best":
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_INFORMAT_UNSUPPORTED",
+                    f"Unsupported informat '{informat}'.",
+                )
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return value
+            try:
+                text = str(value).strip()
+                if text == "":
+                    return None
+                if text.isdigit() and len(text) > 1 and text.startswith("0"):
+                    return float(text)
+                return int(text) if text.isdigit() else float(text)
+            except ValueError:
+                return None
     if node_type == "binop":
         op = node.get("op")
-        left = _eval_expr(node.get("left"), row)
-        right = _eval_expr(node.get("right"), row)
+        left = _eval_expr(node.get("left"), row, formats)
+        right = _eval_expr(node.get("right"), row, formats)
         if op in {"+", "-", "*", "/"}:
             if left is None or right is None:
                 return None
@@ -232,16 +334,16 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any]) -> Any:
         op = node.get("op")
         args = node.get("args") or []
         if op == "and":
-            return all(bool(_eval_expr(a, row)) for a in args)
+            return all(bool(_eval_expr(a, row, formats)) for a in args)
         if op == "or":
-            return any(bool(_eval_expr(a, row)) for a in args)
+            return any(bool(_eval_expr(a, row, formats)) for a in args)
         raise RuntimeFailure(
             "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
             f"Unsupported boolean operator '{op}'",
         )
     if node_type == "unop":
         op = node.get("op")
-        arg = _eval_expr(node.get("arg"), row)
+        arg = _eval_expr(node.get("arg"), row, formats)
         if op == "not":
             return not bool(arg)
         if op == "+":
@@ -362,7 +464,11 @@ def _compute_by_flags(by_vars: list[str], prev_key: Optional[tuple[Any, ...]], c
     return flags
 
 
-def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def _execute_data_step(
+    step: OpStep,
+    tables: Dict[str, List[Dict[str, Any]]],
+    formats: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     params = step.params or {}
     mode = params.get("mode")
     input_specs = params.get("inputs") or []
@@ -402,7 +508,7 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
 
     def apply_action(action: Dict[str, Any], row: Dict[str, Any]) -> None:
         if action.get("type") == "assign":
-            row[action["target"]] = _eval_expr(action["expr"], row)
+            row[action["target"]] = _eval_expr(action["expr"], row, formats)
             return
         if action.get("type") == "output":
             emit_row(row)
@@ -418,6 +524,7 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
             tables[input_tables[0]],
             input_specs[0],
             _loc_to_dict(step.loc),
+            formats,
         )
         if by_vars and not _check_sorted(input_rows, by_vars):
             raise RuntimeFailure(
@@ -439,15 +546,15 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
             for stmt in statements:
                 stmt_type = stmt.get("type")
                 if stmt_type == "assign":
-                    row[stmt["target"]] = _eval_expr(stmt["expr"], row)
+                    row[stmt["target"]] = _eval_expr(stmt["expr"], row, formats)
                 elif stmt_type == "filter":
-                    if not bool(_eval_expr(stmt["predicate"], row)):
+                    if not bool(_eval_expr(stmt["predicate"], row, formats)):
                         dropped = True
                         break
                 elif stmt_type == "output":
                     emit_row(row)
                 elif stmt_type == "if_then":
-                    if bool(_eval_expr(stmt["predicate"], row)):
+                    if bool(_eval_expr(stmt["predicate"], row, formats)):
                         apply_action(stmt["then"], row)
                     elif stmt.get("else") is not None:
                         apply_action(stmt["else"], row)
@@ -466,7 +573,7 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
 
     elif mode == "merge":
         input_rows = [
-            _apply_dataset_options(tables[name], spec, _loc_to_dict(step.loc))
+            _apply_dataset_options(tables[name], spec, _loc_to_dict(step.loc), formats)
             for name, spec in zip(input_tables, input_specs)
         ]
         for table_name, rows in zip(input_tables, input_rows):
@@ -547,15 +654,15 @@ def _execute_data_step(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
                 for stmt in statements:
                     stmt_type = stmt.get("type")
                     if stmt_type == "assign":
-                        row[stmt["target"]] = _eval_expr(stmt["expr"], row)
+                        row[stmt["target"]] = _eval_expr(stmt["expr"], row, formats)
                     elif stmt_type == "filter":
-                        if not bool(_eval_expr(stmt["predicate"], row)):
+                        if not bool(_eval_expr(stmt["predicate"], row, formats)):
                             dropped = True
                             break
                     elif stmt_type == "output":
                         emit_row(row)
                     elif stmt_type == "if_then":
-                        if bool(_eval_expr(stmt["predicate"], row)):
+                        if bool(_eval_expr(stmt["predicate"], row, formats)):
                             apply_action(stmt["then"], row)
                         elif stmt.get("else") is not None:
                             apply_action(stmt["else"], row)
@@ -810,6 +917,34 @@ def _execute_sql_select(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -
     return output_rows
 
 
+def _execute_summary(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    params = step.params or {}
+    class_vars = params.get("class") or []
+    var_vars = params.get("vars") or []
+
+    input_table = step.inputs[0]
+    input_rows = tables.get(input_table, [])
+
+    groups: Dict[tuple[Any, ...], List[Dict[str, Any]]] = {}
+    for row in input_rows:
+        key = tuple(row.get(col) for col in class_vars)
+        groups.setdefault(key, []).append(row)
+
+    def group_sort_key(key: tuple[Any, ...]):
+        return tuple(_sort_key_value(v) for v in key)
+
+    outputs: List[Dict[str, Any]] = []
+    for key in sorted(groups.keys(), key=group_sort_key):
+        rows = groups[key]
+        out_row: Dict[str, Any] = {col: key[idx] for idx, col in enumerate(class_vars)}
+        for var in var_vars:
+            values = [r.get(var) for r in rows if r.get(var) is not None]
+            mean_val = (sum(values) / len(values)) if values else None
+            out_row[f"{var}_mean"] = mean_val
+        outputs.append(out_row)
+    return outputs
+
+
 def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
@@ -817,6 +952,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
 
     try:
         tables: Dict[str, List[Dict[str, Any]]] = {}
+        formats: Dict[str, Dict[str, Any]] = {}
         for name, path_str in bindings.items():
             path = Path(path_str)
             if not path.exists():
@@ -841,33 +977,34 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                 )
 
             op = step.op
-            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose", "sql_select"}:
+            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose", "sql_select", "format", "summary"}:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
                     f"Unsupported operation '{op}'",
                     _loc_to_dict(step.loc),
                 )
 
-            if not step.inputs:
+            if not step.inputs and op != "format":
                 raise RuntimeFailure(
                     "SANS_RUNTIME_TABLE_UNDEFINED",
                     f"Operation '{op}' has no input table.",
                     _loc_to_dict(step.loc),
                 )
-            input_table = step.inputs[0]
-            if input_table not in tables:
-                raise RuntimeFailure(
-                    "SANS_RUNTIME_TABLE_UNDEFINED",
-                    f"Input table '{input_table}' not bound at runtime.",
-                    _loc_to_dict(step.loc),
-                )
+            if step.inputs:
+                input_table = step.inputs[0]
+                if input_table not in tables:
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_TABLE_UNDEFINED",
+                        f"Input table '{input_table}' not bound at runtime.",
+                        _loc_to_dict(step.loc),
+                    )
 
-            input_rows = tables[input_table]
+                input_rows = tables[input_table]
 
             if op == "identity":
                 output_rows = [dict(r) for r in input_rows]
             elif op == "sort":
-                output_rows = _sort_rows(input_rows, step.params.get("by"))
+                output_rows = _sort_rows(input_rows, step.params.get("by"), bool(step.params.get("nodupkey")))
             elif op == "compute":
                 assigns = step.params.get("assign") or []
                 output_rows = []
@@ -876,13 +1013,13 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                     for assign in assigns:
                         col_name = assign.get("col")
                         expr = assign.get("expr")
-                        new_row[col_name] = _eval_expr(expr, new_row)
+                        new_row[col_name] = _eval_expr(expr, new_row, formats)
                     output_rows.append(new_row)
             elif op == "filter":
                 predicate = step.params.get("predicate")
                 output_rows = []
                 for row in input_rows:
-                    keep = _eval_expr(predicate, row)
+                    keep = _eval_expr(predicate, row, formats)
                     if bool(keep):
                         output_rows.append(dict(row))
             elif op == "select":
@@ -905,11 +1042,26 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                         new_row[new_key] = value
                     output_rows.append(new_row)
             elif op == "data_step":
-                output_rows = _execute_data_step(step, tables)
+                output_rows = _execute_data_step(step, tables, formats)
             elif op == "transpose":
                 output_rows = _execute_transpose(step, tables)
             elif op == "sql_select":
                 output_rows = _execute_sql_select(step, tables)
+            elif op == "format":
+                name = (step.params.get("name") or "").lower()
+                if not name:
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_FORMAT_MALFORMED",
+                        "FORMAT step missing name.",
+                        _loc_to_dict(step.loc),
+                    )
+                formats[name] = {
+                    "map": dict(step.params.get("map") or {}),
+                    "other": step.params.get("other"),
+                }
+                output_rows = []
+            elif op == "summary":
+                output_rows = _execute_summary(step, tables)
             else:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",

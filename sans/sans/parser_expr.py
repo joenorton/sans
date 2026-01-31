@@ -11,9 +11,10 @@ TOKEN_PATTERNS = [
     (r"\s+", None), # Whitespace to ignore - MUST be first
     (r"\"[^\"]*\"|\'[^\']*\'", "STRING"), # String literals (double or single quotes) - Moved higher
     (r"\b(first|last)\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # BY-group flags
+    (r"\$?[a-zA-Z_]\w*\.(?![a-zA-Z_])", "IDENTIFIER"), # Formats/informats like $sev. or best.
     (r"\b[a-zA-Z_]\w*\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # Qualified identifiers
     (r"\b(and|or|not)\b", "KEYWORD_LOGICAL"),
-    (r"\b(coalesce|if)\b", "KEYWORD_FUNCTION"), # Allowlisted functions
+    (r"\b(coalesce|if|put|input)\b", "KEYWORD_FUNCTION"), # Allowlisted functions
     (r"\b(ne|eq|lt|le|gt|ge)\b", "OPERATOR"), # SAS-style comparison keywords
     (r"\bnull\b|\.", "NULL"), # Null literal (handle both 'null' keyword and '.' for SAS)
     (r"\b[a-zA-Z_]\w*\b", "IDENTIFIER"), # Column references / variable names
@@ -130,7 +131,7 @@ class Parser:
                         args.append(self.parse_expression())
                 self.consume("RPAREN")
                 # Basic allowlist check for functions (redundant if KEYWORD_FUNCTION is already limited)
-                if function_name not in ["coalesce", "if"]:
+                if function_name not in ["coalesce", "if", "put", "input"]:
                      raise ValueError(f"Unsupported function '{function_name}'")
                 left_expr = call(function_name, args)
             else:

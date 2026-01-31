@@ -6,7 +6,14 @@ from pathlib import Path
 from time import perf_counter
 
 from .frontend import detect_refusal, split_statements, segment_blocks, Block
-from .recognizer import recognize_data_block, recognize_proc_sort_block, recognize_proc_transpose_block, recognize_proc_sql_block
+from .recognizer import (
+    recognize_data_block,
+    recognize_proc_sort_block,
+    recognize_proc_transpose_block,
+    recognize_proc_sql_block,
+    recognize_proc_format_block,
+    recognize_proc_summary_block,
+)
 from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
 from . import __version__ as _engine_version
 
@@ -149,6 +156,15 @@ def compile_script(
             elif block.header.text.lower().startswith("proc sql"):
                 step = recognize_proc_sql_block(block)
                 ir_steps.append(step)
+            elif block.header.text.lower().startswith("proc format"):
+                steps = recognize_proc_format_block(block)
+                if isinstance(steps, list):
+                    ir_steps.extend(steps)
+                else:
+                    ir_steps.append(steps)
+            elif block.header.text.lower().startswith("proc summary"):
+                step = recognize_proc_summary_block(block)
+                ir_steps.append(step)
             else:
                 proc_stmt_text = block.header.text
                 if idx > 0:
@@ -157,7 +173,10 @@ def compile_script(
                         proc_stmt_text = f"{proc_stmt_text};"
                 ir_steps.append(UnknownBlockStep(
                     code="SANS_PARSE_UNSUPPORTED_PROC",
-                    message=f"Unsupported PROC statement: '{proc_stmt_text}'. Hint: only PROC SORT is supported.",
+                    message=(
+                        f"Unsupported PROC statement: '{proc_stmt_text}'. "
+                        "Hint: supported procs include SORT, TRANSPOSE, SQL, FORMAT, and SUMMARY."
+                    ),
                     loc=block.header.loc,
                 ))
         elif block.kind == "other":

@@ -131,17 +131,18 @@ def test_recognize_proc_sort_block_multiple_by():
     assert step.severity == "fatal"
     assert step.loc == Loc("test.sas", 1, 4)
 
-def test_recognize_proc_sort_block_unsupported_option_header():
+def test_recognize_proc_sort_block_nodupkey():
     script = "proc sort data=input_table out=output_table nodupkey;\nby var1;\nrun;"
     block = create_proc_block(script)
 
     step = recognize_proc_sort_block(block)
 
-    assert isinstance(step, UnknownBlockStep)
-    assert step.code == "SANS_PARSE_SORT_UNSUPPORTED_OPTION"
-    assert "Unsupported options in PROC SORT header" in step.message
-    assert step.severity == "fatal"
-    assert step.loc == Loc("test.sas", 1, 1)
+    assert isinstance(step, OpStep)
+    assert step.op == "sort"
+    assert step.inputs == ["input_table"]
+    assert step.outputs == ["output_table"]
+    assert step.params["nodupkey"] is True
+    assert step.loc == Loc("test.sas", 1, 3)
 
 def test_recognize_proc_sort_block_missing_data_option():
     script = "proc sort out=output_table;\nby var1;\nrun;"

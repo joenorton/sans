@@ -1108,14 +1108,17 @@ def recognize_proc_sort_block(block: Block) -> OpStep | UnknownBlockStep:
     header_words = re.findall(r'(\S+)', header_options_str) # Split by space
     
     # We are looking for "key=value" pairs OR standalone keywords like "nodupkey"
-    # For v0.1, we only expect 'data=X' and 'out=Y'. Any other 'word=value' or 'word' is unsupported.
-    supported_keywords = ["data=", "out="] # Note the trailing '=' to distinguish from just 'data' or 'out'
+    # Supported keywords: data=, out=, nodupkey
+    supported_keywords = ["data=", "out=", "nodupkey"] # Note the trailing '=' to distinguish from just 'data' or 'out'
+    nodupkey = False
 
     for word in header_words:
         is_supported = False
         for sk in supported_keywords:
             if word.startswith(sk):
                 is_supported = True
+                if word == "nodupkey":
+                    nodupkey = True
                 break
         if not is_supported:
             unsupported_options.append(word)
@@ -1172,11 +1175,219 @@ def recognize_proc_sort_block(block: Block) -> OpStep | UnknownBlockStep:
             loc=block.loc_span,
         )
 
+    params: dict[str, Any] = {"by": [{"col": v, "asc": True} for v in by_vars]}
+    if nodupkey:
+        params["nodupkey"] = True
+
     return OpStep(
         op="sort",
         inputs=[input_table],
         outputs=[output_table],
-        params={"by": [{"col": v, "asc": True} for v in by_vars]},
+        params=params,
+        loc=block.loc_span,
+    )
+
+
+def recognize_proc_format_block(block: Block) -> list[OpStep] | UnknownBlockStep:
+    if not block.header.text.lower().startswith("proc format"):
+        return UnknownBlockStep(
+            code="SANS_PARSE_INVALID_PROC_FORMAT_HEADER",
+            message=f"Expected PROC FORMAT block to start with 'proc format', got '{block.header.text}'",
+            loc=block.header.loc,
+        )
+
+    value_statements = [s for s in block.body if s.text.lower().startswith("value ")]
+    other_statements = [
+        s for s in block.body
+        if not s.text.lower().startswith("value ")
+        and s.text.lower() != "run"
+    ]
+    if other_statements:
+        return UnknownBlockStep(
+            code="SANS_PARSE_FORMAT_UNSUPPORTED_STATEMENT",
+            message=f"Unsupported PROC FORMAT statement: '{other_statements[0].text}'",
+            loc=other_statements[0].loc,
+        )
+    if not value_statements:
+        return UnknownBlockStep(
+            code="SANS_PARSE_FORMAT_MISSING_VALUE",
+            message="PROC FORMAT requires at least one VALUE statement.",
+            loc=block.loc_span,
+        )
+
+    steps: list[OpStep] = []
+    for stmt in value_statements:
+        stmt_text = stmt.text.strip()
+        match = re.match(r"value\s+(\$?[a-zA-Z_]\w*)\s+(.+)$", stmt_text, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return UnknownBlockStep(
+                code="SANS_PARSE_FORMAT_VALUE_MALFORMED",
+                message=f"Malformed VALUE statement: '{stmt.text}'",
+                loc=stmt.loc,
+            )
+        fmt_name = match.group(1).lower()
+        mappings_text = match.group(2)
+
+        pairs = []
+        for m in re.finditer(r"(\"[^\"]*\"|'[^']*'|other)\s*=\s*(\"[^\"]*\"|'[^']*')", mappings_text, re.IGNORECASE):
+            key = m.group(1)
+            val = m.group(2)
+            pairs.append((key, val))
+
+        if not pairs:
+            return UnknownBlockStep(
+                code="SANS_PARSE_FORMAT_VALUE_MALFORMED",
+                message=f"No mappings found in VALUE statement: '{stmt.text}'",
+                loc=stmt.loc,
+            )
+
+        mapping: dict[str, str] = {}
+        default_other = None
+        for key_token, val_token in pairs:
+            val = val_token[1:-1]
+            if key_token.lower() == "other":
+                default_other = val
+                continue
+            key = key_token[1:-1]
+            mapping[key] = val
+
+        steps.append(
+            OpStep(
+                op="format",
+                inputs=[],
+                outputs=[f"__format__{fmt_name}"],
+                params={"name": fmt_name, "map": mapping, "other": default_other},
+                loc=stmt.loc,
+            )
+        )
+
+    return steps
+
+
+def recognize_proc_summary_block(block: Block) -> OpStep | UnknownBlockStep:
+    if not block.header.text.lower().startswith("proc summary"):
+        return UnknownBlockStep(
+            code="SANS_PARSE_INVALID_PROC_SUMMARY_HEADER",
+            message=f"Expected PROC SUMMARY block to start with 'proc summary', got '{block.header.text}'",
+            loc=block.header.loc,
+        )
+
+    header_lower = block.header.text.lower()
+    data_match = re.search(r"data\s*=\s*(\S+)", header_lower)
+    input_table = data_match.group(1) if data_match else None
+
+    header_options_str = header_lower[len("proc summary"):].strip()
+    header_words = re.findall(r"(\S+)", header_options_str)
+    supported_keywords = ["data=", "nway"]
+    unsupported_options = []
+    nway = False
+
+    for word in header_words:
+        is_supported = False
+        for sk in supported_keywords:
+            if word.startswith(sk):
+                is_supported = True
+                if word == "nway":
+                    nway = True
+                break
+        if not is_supported:
+            unsupported_options.append(word)
+
+    if unsupported_options:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_UNSUPPORTED_OPTION",
+            message=f"Unsupported options in PROC SUMMARY header: {', '.join(unsupported_options)}",
+            loc=block.header.loc,
+        )
+
+    if not input_table:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_MISSING_DATA",
+            message="PROC SUMMARY requires a DATA= option.",
+            loc=block.header.loc,
+        )
+
+    if not nway:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_MISSING_NWAY",
+            message="PROC SUMMARY requires the NWAY option.",
+            loc=block.header.loc,
+        )
+
+    class_statements = [s for s in block.body if s.text.lower().startswith("class ")]
+    var_statements = [s for s in block.body if s.text.lower().startswith("var ")]
+    output_statements = [s for s in block.body if s.text.lower().startswith("output ")]
+
+    if len(class_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_MISSING_CLASS",
+            message="PROC SUMMARY requires exactly one CLASS statement.",
+            loc=block.loc_span,
+        )
+    if len(var_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_MISSING_VAR",
+            message="PROC SUMMARY requires exactly one VAR statement.",
+            loc=block.loc_span,
+        )
+    if len(output_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_MISSING_OUTPUT",
+            message="PROC SUMMARY requires exactly one OUTPUT statement.",
+            loc=block.loc_span,
+        )
+
+    class_match = re.match(r"class\s+(.+)", class_statements[0].text.lower())
+    if not class_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_CLASS_MALFORMED",
+            message=f"Malformed CLASS statement: '{class_statements[0].text}'",
+            loc=class_statements[0].loc,
+        )
+    class_vars = [v for v in re.split(r"\s+", class_match.group(1).strip()) if v]
+
+    var_match = re.match(r"var\s+(.+)", var_statements[0].text.lower())
+    if not var_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_VAR_MALFORMED",
+            message=f"Malformed VAR statement: '{var_statements[0].text}'",
+            loc=var_statements[0].loc,
+        )
+    var_vars = [v for v in re.split(r"\s+", var_match.group(1).strip()) if v]
+
+    output_stmt = output_statements[0].text.strip()
+    output_match = re.match(
+        r"output\s+out\s*=\s*(\S+)\s+mean\s*=\s*/\s*autoname",
+        output_stmt,
+        re.IGNORECASE,
+    )
+    if not output_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_OUTPUT_MALFORMED",
+            message=f"Malformed OUTPUT statement: '{output_stmt}'",
+            loc=output_statements[0].loc,
+        )
+    output_table = output_match.group(1).lower()
+
+    other_statements_in_body = [
+        s for s in block.body
+        if not s.text.lower().startswith("class ")
+        and not s.text.lower().startswith("var ")
+        and not s.text.lower().startswith("output ")
+        and s.text.lower() != "run"
+    ]
+    if other_statements_in_body:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SUMMARY_UNSUPPORTED_BODY_STATEMENT",
+            message="PROC SUMMARY contains unsupported statements in its body.",
+            loc=block.loc_span,
+        )
+
+    return OpStep(
+        op="summary",
+        inputs=[input_table],
+        outputs=[output_table],
+        params={"class": class_vars, "vars": var_vars, "stat": "mean", "autoname": True},
         loc=block.loc_span,
     )
 

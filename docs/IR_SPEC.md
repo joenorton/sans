@@ -27,7 +27,7 @@ Expression AST (v0.1)
   - `{"type":"binop","op":"...","left":...,"right":...}`
   - `{"type":"boolop","op":"and|or","args":[...]}`
   - `{"type":"unop","op":"not|+|-","arg":...}`
-  - `{"type":"call","name":"coalesce|if","args":[...]}`
+  - `{"type":"call","name":"coalesce|if|put|input","args":[...]}`
 
 Data step op (stateful subset)
 - Op name: `data_step`
@@ -67,7 +67,28 @@ SQL select op (subset)
 
 Determinism rules (v0.1)
 - `sort` is stable; null ordering is explicit in runtime settings.
+- `sort` may apply `nodupkey` with last-wins after sorting by keys.
 - Group output ordering (if/when added) must be explicit.
+
+Format op (minimal subset)
+- Op name: `format`
+- Params:
+  - `name`: format name (lowercase, optional `$` prefix)
+  - `map`: mapping of input strings to output strings
+  - `other`: default output when no match
+- Semantics:
+  - Registers a format mapping for `put()` calls in expressions.
+
+Summary op (minimal subset)
+- Op name: `summary`
+- Params:
+  - `class`: list of grouping keys
+  - `vars`: list of numeric columns to aggregate
+  - `stat`: `"mean"` only
+  - `autoname`: bool (true => `<var>_mean` output)
+- Semantics:
+  - Groups by CLASS keys and emits mean per VAR.
+  - Output rows are ordered by class keys for determinism.
 
 Validator invariants (summary)
 - No use of undefined input tables.

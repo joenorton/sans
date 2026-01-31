@@ -179,6 +179,8 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 * `sort` (stable, null order explicit)
 * `group_agg` (means/freq-like)
 * `sql_select` (proc sql subset)
+* `format` (proc format mappings)
+* `summary` (group mean aggregation)
 * `join` (strict keys + dup policy)
 * `concat_rows`
 * `deduplicate`
@@ -196,6 +198,8 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
   * `set`/`merge` with `by`, `retain`, `first./last.`, `output`, `if/then/else`, `keep`, and `in=` flags
 * `proc transpose` (by/id/var)
 * `proc sql` subset (create table as select with inner/left joins, where, group by, aggregates)
+* `proc format` (value mapping tables)
+* `proc summary` (nway class means)
 * `proc compare` with `id` required
 * `proc means` basic stats via `class/var` (strict allowlist)
 * `proc freq` minimal (one-way) if you must; otherwise defer
@@ -204,6 +208,8 @@ hard-fail tokens/constructs (v0.1):
 
 * macro language (`%macro`, `%do`, `%if`, `%include`, etc.)
 * `proc sql` forms outside the supported subset
+* `proc format` forms outside value mapping subset
+* `proc summary` forms outside the nway/mean subset
 * data step features still unsupported: `lag`, `do/end` blocks, arrays
 * io-ish statements: `infile`, `input`, `put`, `call execute`
 
@@ -221,7 +227,7 @@ no python eval. no “simple string to runtime.” expressions are ASTs.
 * unary `+/-/not`
 * binary arithmetic, comparisons
 * boolean `and/or`
-* whitelisted calls (small set): `coalesce`, `if`, `substr`, `upper/lower/strip`, strict `parse_date` if you choose
+* whitelisted calls (small set): `coalesce`, `if`, `put`, `input`, `substr`, `upper/lower/strip`, strict `parse_date` if you choose
 
 **type policy**
 

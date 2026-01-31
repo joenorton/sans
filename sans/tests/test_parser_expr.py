@@ -100,6 +100,17 @@ def test_parse_function_call():
             lit(0),
         ],
     )
+    assert parse_expression_from_string("put(aesev, $sev.)") == call(
+        "put",
+        [col("aesev"), col("$sev.")],
+    )
+    assert parse_expression_from_string("input(put(a, $fmt.), best.)") == call(
+        "input",
+        [
+            call("put", [col("a"), col("$fmt.")]),
+            col("best."),
+        ],
+    )
 
 def test_parse_unsupported_function():
     with pytest.raises(ValueError, match="Unsupported function 'unknown_func'"):

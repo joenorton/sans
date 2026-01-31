@@ -16,9 +16,11 @@ Report contract: `docs/REPORT_CONTRACT.md`
 
 Supported subset (current):
 - data steps: `set`/`merge` with assignments, `if`, `keep/drop/rename`, BY-group flags, retain, and dataset options (`keep/drop/rename/where`, `in=` on merge)
-- `proc sort`
+- `proc sort` (including `nodupkey`, last wins)
 - `proc transpose` (by/id/var)
 - `proc sql` subset (create table as select with inner/left joins, where, group by, aggregates)
+- `proc format` (VALUE mappings + `put()` for lookups)
+- `proc summary` (NWAY class means with `output out=... mean= / autoname`)
 - `validate --profile sdtm` (DM/AE/LB rulepack)
 
 ### Minimal example
