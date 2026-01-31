@@ -18,6 +18,8 @@ def test_parse_literal_null():
 def test_parse_column_ref():
     assert parse_expression_from_string("my_column") == col("my_column")
     assert parse_expression_from_string("col_1") == col("col_1")
+    assert parse_expression_from_string("first.subjid") == col("first.subjid")
+    assert parse_expression_from_string("last.visit") == col("last.visit")
 
 def test_parse_binary_operators_precedence():
     # x = a + b * 2 parses as a + (b*2)
@@ -41,6 +43,12 @@ def test_parse_comparisons():
     assert parse_expression_from_string("a = b") == binop("=", col("a"), col("b"))
     assert parse_expression_from_string("a > 10") == binop(">", col("a"), lit(10))
     assert parse_expression_from_string("x ~= y") == binop("!=", col("x"), col("y"))
+    assert parse_expression_from_string("a ne b") == binop("!=", col("a"), col("b"))
+    assert parse_expression_from_string("a eq b") == binop("=", col("a"), col("b"))
+    assert parse_expression_from_string("a lt b") == binop("<", col("a"), col("b"))
+    assert parse_expression_from_string("a le b") == binop("<=", col("a"), col("b"))
+    assert parse_expression_from_string("a gt b") == binop(">", col("a"), col("b"))
+    assert parse_expression_from_string("a ge b") == binop(">=", col("a"), col("b"))
 
 def test_parse_logical_operators_precedence():
     # if a > 1 and b < 2 works

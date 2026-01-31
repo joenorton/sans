@@ -151,40 +151,31 @@ class TestDataStepCompiler:
         """)
         irdoc = check_script(script, "test.sas", tables={"initial_in"})
         assert isinstance(irdoc, IRDoc)
-        assert len(irdoc.steps) == 4 # select, rename, compute, filter
+        assert len(irdoc.steps) == 4 # rename, compute, filter, select
 
-        # 1. Select
-        select_step = irdoc.steps[0]
-        assert select_step.op == "select"
-        assert select_step.inputs == ["initial_in"]
-        assert select_step.outputs[0].startswith("final_out__") # temp output
-        assert select_step.params == {"keep": ["colX", "colY"], "drop": []}
-        assert select_step.loc == L("test.sas", 2, 8)
-        temp1 = select_step.outputs[0]
-
-        # 2. Rename
-        rename_step = irdoc.steps[1]
+        # 1. Rename
+        rename_step = irdoc.steps[0]
         assert rename_step.op == "rename"
-        assert rename_step.inputs == [temp1]
+        assert rename_step.inputs == ["initial_in"]
         assert rename_step.outputs[0].startswith("final_out__") # temp output
         assert rename_step.loc == L("test.sas", 2, 8)
-        temp2 = rename_step.outputs[0]
+        temp1 = rename_step.outputs[0]
 
-        # 3. Compute
-        compute_step = irdoc.steps[2]
+        # 2. Compute
+        compute_step = irdoc.steps[1]
         assert compute_step.op == "compute"
-        assert compute_step.inputs == [temp2]
+        assert compute_step.inputs == [temp1]
         assert compute_step.outputs[0].startswith("final_out__") # temp output
         assert compute_step.params["assign"][0]["col"] == "new_col"
         assert compute_step.params["assign"][0]["expr"] == binop("+", col("colX"), lit(5))
         assert compute_step.loc == L("test.sas", 2, 8)
-        temp3 = compute_step.outputs[0]
+        temp2 = compute_step.outputs[0]
 
-        # 4. Filter
-        filter_step = irdoc.steps[3]
+        # 3. Filter
+        filter_step = irdoc.steps[2]
         assert filter_step.op == "filter"
-        assert filter_step.inputs == [temp3]
-        assert filter_step.outputs == ["final_out"] # Final output
+        assert filter_step.inputs == [temp2]
+        assert filter_step.outputs[0].startswith("final_out__")
         assert filter_step.params["predicate"] == boolop(
             "or",
             [
@@ -194,12 +185,19 @@ class TestDataStepCompiler:
         )
         assert filter_step.loc == L("test.sas", 2, 8)
 
+        # 4. Select
+        select_step = irdoc.steps[3]
+        assert select_step.op == "select"
+        assert select_step.inputs == [filter_step.outputs[0]]
+        assert select_step.outputs == ["final_out"] # Final output
+        assert select_step.params == {"keep": ["colX", "colY"], "drop": []}
+        assert select_step.loc == L("test.sas", 2, 8)
+
     # --- Forbidden Token Checks ---
     @pytest.mark.parametrize("input_script_part, detected_token, line_num", [
-        ("do;", "do", 4), ("end;", "end", 4), ("retain;", "retain", 4), ("lag(col1);", "lag", 4),
-        ("first.var;", "first.", 4), ("last.var;", "last.", 4), ("array arr[5];", "array", 4),
-        ("call symput('a', 'b');", "call", 4), ("output;", "output", 4), ("by col;", "by", 4),
-        ("merge dataset;", "merge", 4), ("infile 'file.txt';", "infile", 4), ("input var1 var2;", "input", 4),
+        ("do;", "do", 4), ("end;", "end", 4), ("lag(col1);", "lag", 4),
+        ("array arr[5];", "array", 4), ("call symput('a', 'b');", "call", 4),
+        ("infile 'file.txt';", "infile", 4), ("input var1 var2;", "input", 4),
         ("proc print;", "proc", 4), ("%macro;", "%", 4)
     ])
     def test_forbidden_token_in_data_step(self, input_script_part, detected_token, line_num):
@@ -369,6 +367,18 @@ class TestDataStepCompiler:
         assert "Unsupported statement or unparsed content in data step: 'unknown_statement'" in exc_info.value.message
         assert exc_info.value.loc == L("test.sas", 2, 5)
 
+    def test_merge_without_by_refused(self):
+        script = textwrap.dedent("""
+            data out;
+              merge a b;
+              if 1 = 1 then output;
+            run;
+        """)
+        with pytest.raises(UnknownBlockStep) as exc_info:
+            check_script(script, "test.sas", tables={"a", "b"})
+        assert exc_info.value.code == "SANS_PARSE_DATASTEP_MISSING_BY"
+        assert "requires a BY statement" in exc_info.value.message
+
     # --- Proc Sort Tests ---
     def test_proc_sort_unsupported_option(self):
         script = textwrap.dedent("""
@@ -532,3 +542,17 @@ class TestSortednessFacts:
         assert exc_info.value.code == "SANS_VALIDATE_SORT_MISSING_BY"
         assert "PROC SORT operation requires 'by' variables." in exc_info.value.message
         assert exc_info.value.loc == L("test.sas", 2, 3)
+
+    def test_data_step_requires_sorted_input_for_by(self):
+        script = textwrap.dedent("""
+            data out;
+              set in_table;
+              by id;
+              if first.id then output;
+            run;
+        """)
+        with pytest.raises(UnknownBlockStep) as exc_info:
+            check_script(script, "test.sas", tables={"in_table"})
+        assert exc_info.value.code == "SANS_VALIDATE_ORDER_REQUIRED"
+        assert "must be sorted by ['id']" in exc_info.value.message
+        assert exc_info.value.loc == L("test.sas", 2, 6)

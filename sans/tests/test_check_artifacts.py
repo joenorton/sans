@@ -90,3 +90,30 @@ def test_emit_check_artifacts_refusal_plan_matches_report():
         assert plan["steps"][0]["loc"] == primary["loc"]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_emit_check_artifacts_refusal_error_shape():
+    temp_dir = _make_local_temp_dir()
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  lag(value);",
+            "run;",
+        ]
+    )
+    try:
+        _, report = emit_check_artifacts(
+            script,
+            "test.sas",
+            tables={"in"},
+            out_dir=temp_dir,
+        )
+        assert report["status"] == "refused"
+        primary = report["primary_error"]
+        assert set(primary.keys()) >= {"code", "message", "loc"}
+        assert primary["loc"]["file"] == "test.sas"
+        assert primary["loc"]["line_start"] == 1
+        assert "lag" in primary["message"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

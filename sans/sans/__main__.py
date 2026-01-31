@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .compiler import emit_check_artifacts
 from .runtime import run_script
+from .validator_sdtm import validate_sdtm
 from . import __version__ as _engine_version
 
 
@@ -43,6 +44,24 @@ def _write_failed_report(out_dir: Path, message: str) -> int:
     return 50
 
 
+def _write_failed_validation_report(out_dir: Path, message: str) -> int:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = out_dir / "validation.report.json"
+    report = {
+        "status": "failed",
+        "exit_code_bucket": 31,
+        "profile": None,
+        "tables": [],
+        "diagnostics": [
+            {"code": "SANS_VALIDATE_PROFILE_UNSUPPORTED", "message": message}
+        ],
+        "summary": {"errors": 1},
+    }
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(f"failed: {message}")
+    return 31
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sans", description="SANS compiler/checker")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -60,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
     run_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     run_parser.add_argument("--no-strict", dest="strict", action="store_false")
+
+    validate_parser = subparsers.add_parser("validate", help="Validate tables against a profile")
+    validate_parser.add_argument("--profile", required=True, help="Validation profile (e.g., sdtm)")
+    validate_parser.add_argument("--out", required=True, help="Output directory for validation report")
+    validate_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
 
     args = parser.parse_args(argv)
 
@@ -128,6 +152,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"failed: {primary.get('code')} at {loc_str}".rstrip())
         else:
             print("ok: wrote plan.ir.json report.json")
+        return int(report.get("exit_code_bucket", 50))
+
+    if args.command == "validate":
+        out_dir = Path(args.out)
+        if args.profile.lower() != "sdtm":
+            return _write_failed_validation_report(out_dir, f"Unsupported profile '{args.profile}'")
+
+        bindings = {}
+        if args.tables:
+            for item in args.tables.split(","):
+                if not item.strip():
+                    continue
+                if "=" not in item:
+                    return _write_failed_validation_report(out_dir, f"Invalid table binding '{item}'")
+                name, path = item.split("=", 1)
+                bindings[name.strip()] = path.strip()
+
+        report = validate_sdtm(bindings, out_dir)
+        if report.get("status") == "failed":
+            print("failed: validation.report.json")
+        else:
+            print("ok: wrote validation.report.json")
         return int(report.get("exit_code_bucket", 50))
 
     return 0

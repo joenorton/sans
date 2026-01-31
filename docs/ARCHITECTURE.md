@@ -189,6 +189,9 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 * data step `set` with:
 
   * assignments, keep/drop/rename, filter-only `if`, limited `if-then-else` assignment
+* stateful data step subset:
+
+  * `set`/`merge` with `by`, `retain`, `first./last.`, `output`, `if/then/else`, `keep`, and `in=` flags
 * `proc compare` with `id` required
 * `proc means` basic stats via `class/var` (strict allowlist)
 * `proc freq` minimal (one-way) if you must; otherwise defer
@@ -197,7 +200,7 @@ hard-fail tokens/constructs (v0.1):
 
 * macro language (`%macro`, `%do`, `%if`, `%include`, etc.)
 * `proc sql`
-* stateful data step semantics: `retain`, `lag`, `first.`, `last.`, `do/end` blocks, arrays
+* data step features still unsupported: `lag`, `do/end` blocks, arrays
 * io-ish statements: `infile`, `input`, `put`, `call execute`
 
 the refusal is a feature, not a bug.
@@ -287,9 +290,9 @@ example refusal payload:
 ```json
 {
   "code": "SANS_BLOCK_STATEFUL_TOKEN",
-  "message": "retain/lag/first./last. not supported in v0.1; refusing to execute",
+  "message": "lag/do/end/array not supported in v0.1; refusing to execute",
   "loc": { "file": "script.sas", "line_start": 210, "line_end": 289 },
-  "tokens": ["retain", "first."]
+  "tokens": ["lag"]
 }
 ```
 

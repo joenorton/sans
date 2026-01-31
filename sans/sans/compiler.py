@@ -151,14 +151,17 @@ def compile_script(
                         proc_stmt_text = f"{proc_stmt_text};"
                 ir_steps.append(UnknownBlockStep(
                     code="SANS_PARSE_UNSUPPORTED_PROC",
-                    message=f"Unsupported PROC statement: '{proc_stmt_text}'",
+                    message=f"Unsupported PROC statement: '{proc_stmt_text}'. Hint: only PROC SORT is supported.",
                     loc=block.header.loc,
                 ))
         elif block.kind == "other":
             # For v0.1, any 'other' statement is an implicit refusal.
             ir_steps.append(UnknownBlockStep(
                 code="SANS_PARSE_UNSUPPORTED_STATEMENT",
-                message=f"Unsupported top-level statement: '{block.header.text}'",
+                message=(
+                    f"Unsupported top-level statement: '{block.header.text}'. "
+                    "Hint: use DATA steps or PROC SORT only."
+                ),
                 loc=block.header.loc,
             ))
         else:

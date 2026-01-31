@@ -5,10 +5,61 @@ from typing import Optional, Any
 from .frontend import Block, Statement
 from .ir import OpStep, UnknownBlockStep, Step # Import Step explicitly
 from ._loc import Loc
-from .parser_expr import parse_expression_from_string # New import
+from .parser_expr import parse_expression_from_string
+
+
+def _starts_with_token(stmt_text: str, token: str, extra_follow: str = "") -> bool:
+    if not stmt_text.startswith(token):
+        return False
+    if len(stmt_text) == len(token):
+        return True
+    next_ch = stmt_text[len(token)]
+    return next_ch.isspace() or next_ch in extra_follow
+
+
+def _expr_uses_by_flag(expr: Any) -> bool:
+    if not isinstance(expr, dict):
+        return False
+    node_type = expr.get("type")
+    if node_type == "col":
+        name = expr.get("name", "")
+        return name.startswith("first.") or name.startswith("last.")
+    if node_type == "binop":
+        return _expr_uses_by_flag(expr.get("left")) or _expr_uses_by_flag(expr.get("right"))
+    if node_type == "boolop":
+        return any(_expr_uses_by_flag(arg) for arg in expr.get("args", []))
+    if node_type == "unop":
+        return _expr_uses_by_flag(expr.get("arg"))
+    if node_type == "call":
+        return any(_expr_uses_by_flag(arg) for arg in expr.get("args", []))
+    return False
+
+
+def _is_stateful_data_step(block: Block) -> bool:
+    for stmt in block.body:
+        s = stmt.text.strip().lower()
+        if not s:
+            continue
+        if s.startswith("merge "):
+            return True
+        if s.startswith("by "):
+            return True
+        if s.startswith("retain "):
+            return True
+        if s.startswith("output"):
+            return True
+        if s.startswith("else "):
+            return True
+        if s.startswith("if ") and " then " in s:
+            return True
+        if "first." in s or "last." in s:
+            return True
+    return False
 
 
 def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
+    if _is_stateful_data_step(block):
+        return _recognize_stateful_data_block(block)
     steps: list[OpStep | UnknownBlockStep] = []
 
     if not block.header.text.lower().startswith("data "):
@@ -47,14 +98,6 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
     current_input_table = set_match.group(1)
 
     # Hard fail for forbidden tokens (statement-leading keywords only)
-    def starts_with_token(stmt_text: str, token: str, extra_follow: str = "") -> bool:
-        if not stmt_text.startswith(token):
-            return False
-        if len(stmt_text) == len(token):
-            return True
-        next_ch = stmt_text[len(token)]
-        return next_ch.isspace() or next_ch in extra_follow
-
     def find_forbidden_token(stmt_text: str) -> Optional[str]:
         s = stmt_text.strip().lower()
         if not s:
@@ -62,33 +105,33 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
         if s.startswith("%"):
             return "%"
         # Order matters for clearer error messages
-        if starts_with_token(s, "proc"):
+        if _starts_with_token(s, "proc"):
             return "proc"
-        if starts_with_token(s, "do"):
+        if _starts_with_token(s, "do"):
             return "do"
-        if starts_with_token(s, "end"):
+        if _starts_with_token(s, "end"):
             return "end"
-        if starts_with_token(s, "retain"):
+        if _starts_with_token(s, "retain"):
             return "retain"
-        if starts_with_token(s, "lag", extra_follow="("):
+        if _starts_with_token(s, "lag", extra_follow="("):
             return "lag"
         if s.startswith("first."):
             return "first."
         if s.startswith("last."):
             return "last."
-        if starts_with_token(s, "array"):
+        if _starts_with_token(s, "array"):
             return "array"
-        if starts_with_token(s, "call"):
+        if _starts_with_token(s, "call"):
             return "call"
-        if starts_with_token(s, "output"):
+        if _starts_with_token(s, "output"):
             return "output"
-        if starts_with_token(s, "by"):
+        if _starts_with_token(s, "by"):
             return "by"
-        if starts_with_token(s, "merge"):
+        if _starts_with_token(s, "merge"):
             return "merge"
-        if starts_with_token(s, "infile"):
+        if _starts_with_token(s, "infile"):
             return "infile"
-        if starts_with_token(s, "input"):
+        if _starts_with_token(s, "input"):
             return "input"
         return None
 
@@ -97,7 +140,10 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
         if token:
             return [UnknownBlockStep(
                 code="SANS_BLOCK_STATEFUL_TOKEN",
-                message=f"Forbidden token '{token}' detected in data step: '{stmt.text}'",
+                message=(
+                    f"Forbidden token '{token}' detected in data step: '{stmt.text}'. "
+                    "Hint: this subset only supports simple SET + keep/rename/assign/filter steps."
+                ),
                 loc=block.loc_span,
             )]
 
@@ -111,10 +157,10 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
     # Initialize pipeline with the input table from SET statement
     pipeline_input_table = current_input_table
     
-    # Process body statements in canonical order: select, rename, compute, filter
+    # Process body statements in canonical order: rename, compute, filter, select
     
     # ----------------------------------------------------------------------
-    # 1. Select (keep/drop)
+    # 1. Select (keep/drop) - applied last in the pipeline
     # ----------------------------------------------------------------------
     select_statements = [s for s in block.body if s.text.lower().startswith("keep ") or s.text.lower().startswith("drop ")]
     if len(select_statements) > 1:
@@ -123,6 +169,7 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
             message="Data step can have at most one KEEP or DROP statement.",
             loc=block.loc_span,
         )]
+    select_params = None
     if select_statements:
         select_stmt = select_statements[0]
         select_params = {"keep": [], "drop": []}
@@ -132,16 +179,6 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
         else: # drop
             cols_str = select_stmt.text[len("drop "):].strip()
             select_params["drop"] = re.split(r'\s+', cols_str)
-        
-        pipeline_output_table = generate_temp_output()
-        steps.append(OpStep(
-            op="select",
-            inputs=[pipeline_input_table],
-            outputs=[pipeline_output_table],
-            params=select_params,
-            loc=block.loc_span,
-        ))
-        pipeline_input_table = pipeline_output_table
 
     # ----------------------------------------------------------------------
     # 2. Rename
@@ -233,32 +270,44 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
                 loc=filter_stmt.loc,
             )]
         
-        # The filter is the last step to produce the final output table
+        # The filter is the last step unless select is present
+        pipeline_output_table = final_output_table
+        if select_params:
+            pipeline_output_table = generate_temp_output()
         steps.append(OpStep(
             op="filter",
             inputs=[pipeline_input_table],
-            outputs=[final_output_table],
+            outputs=[pipeline_output_table],
             params={"predicate": predicate_ast},
             loc=block.loc_span,
         ))
-        # No more pipeline_input_table update, as this is the final output
+        pipeline_input_table = pipeline_output_table
     else:
-        # If no filter, the last operation's output becomes the final_output_table
-        # Or if no operations after set, then set's input is directly output
-        if not steps: # Only 'set' and 'run', no intermediate ops were generated
-             steps.append(OpStep(
+        # No filter; output handled after optional select
+        if not steps and not select_params: # Only 'set' and 'run', no intermediate ops were generated
+            steps.append(OpStep(
                 op="identity", # A pass-through op
                 inputs=[pipeline_input_table],
                 outputs=[final_output_table],
                 loc=block.loc_span, # Loc of the entire data block
             ))
-        else:
-            # If there were intermediate steps, ensure the last one outputs to final_output_table
-            # This is a bit hacky, but avoids creating an unnecessary identity step
-            last_step = steps[-1]
-            # Since OpStep is not frozen, we can modify its outputs directly
-            if isinstance(last_step, OpStep): # Should always be OpStep here
-                last_step.outputs = [final_output_table]
+
+    # ----------------------------------------------------------------------
+    # 5. Select (keep/drop) applied last if present
+    # ----------------------------------------------------------------------
+    if select_params:
+        steps.append(OpStep(
+            op="select",
+            inputs=[pipeline_input_table],
+            outputs=[final_output_table],
+            params=select_params,
+            loc=block.loc_span,
+        ))
+    elif steps:
+        # If there were intermediate steps and no select, ensure the last one outputs final_output_table
+        last_step = steps[-1]
+        if isinstance(last_step, OpStep):
+            last_step.outputs = [final_output_table]
 
     # ----------------------------------------------------------------------
     # Check for unparsed statements or other disallowed statements
@@ -287,11 +336,397 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
         # Any remaining statement in body is unsupported
         return [UnknownBlockStep(
             code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
-            message=f"Unsupported statement or unparsed content in data step: '{stmt.text}'",
+            message=(
+                f"Unsupported statement or unparsed content in data step: '{stmt.text}'. "
+                "Hint: remove the statement or rewrite using assignments + if filters."
+            ),
             loc=block.loc_span,
         )]
 
     return steps
+
+
+def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
+    if not block.header.text.lower().startswith("data "):
+        return [UnknownBlockStep(
+            code="SANS_PARSE_INVALID_DATA_BLOCK_HEADER",
+            message=f"Expected data block to start with 'data', got '{block.header.text}'",
+            loc=block.header.loc,
+        )]
+
+    header_match = re.match(r"data\s+(\S+)", block.header.text.lower())
+    if not header_match:
+        return [UnknownBlockStep(
+            code="SANS_PARSE_DATA_HEADER_MALFORMED",
+            message=f"Malformed data block header: '{block.header.text}'",
+            loc=block.header.loc,
+        )]
+    final_output_table = header_match.group(1)
+
+    set_statements = [s for s in block.body if s.text.lower().startswith("set ")]
+    merge_statements = [s for s in block.body if s.text.lower().startswith("merge ")]
+    if len(set_statements) + len(merge_statements) != 1:
+        return [UnknownBlockStep(
+            code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+            message="Data step must contain exactly one SET or MERGE statement.",
+            loc=block.loc_span,
+        )]
+
+    by_statements = [s for s in block.body if s.text.lower().startswith("by ")]
+    if len(by_statements) > 1:
+        return [UnknownBlockStep(
+            code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+            message="Data step can have at most one BY statement.",
+            loc=block.loc_span,
+        )]
+
+    retain_statements = [s for s in block.body if s.text.lower().startswith("retain ")]
+    if len(retain_statements) > 1:
+        return [UnknownBlockStep(
+            code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+            message="Data step can have at most one RETAIN statement.",
+            loc=block.loc_span,
+        )]
+
+    keep_statements = [s for s in block.body if s.text.lower().startswith("keep ")]
+    if len(keep_statements) > 1:
+        return [UnknownBlockStep(
+            code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+            message="Data step can have at most one KEEP statement.",
+            loc=block.loc_span,
+        )]
+
+    # Parse set/merge inputs.
+    input_specs: list[dict[str, Any]] = []
+    mode: str
+    if set_statements:
+        mode = "set"
+        set_stmt = set_statements[0]
+        set_match = re.match(r"set\s+(\S+)", set_stmt.text.lower())
+        if not set_match:
+            return [UnknownBlockStep(
+                code="SANS_PARSE_SET_STATEMENT_MALFORMED",
+                message=f"Malformed SET statement: '{set_stmt.text}'",
+                loc=set_stmt.loc,
+            )]
+        input_specs.append({"table": set_match.group(1), "in": None})
+    else:
+        mode = "merge"
+        merge_stmt = merge_statements[0]
+        merge_match = re.match(r"merge\s+(.+)", merge_stmt.text, re.IGNORECASE)
+        merge_body = merge_match.group(1).strip() if merge_match else ""
+        if not merge_body:
+            return [UnknownBlockStep(
+                code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
+                message=f"Malformed MERGE statement: '{merge_stmt.text}'",
+                loc=merge_stmt.loc,
+            )]
+        parts = re.split(r"\s+", merge_body)
+        in_flags: set[str] = set()
+        for part in parts:
+            if not part:
+                continue
+            match = re.match(r"^([a-zA-Z_]\w*)(\(([^)]*)\))?$", part)
+            if not match:
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
+                    message=f"Malformed MERGE dataset spec: '{part}'",
+                    loc=merge_stmt.loc,
+                )]
+            table_name = match.group(1)
+            opts = match.group(3)
+            in_flag = None
+            if opts:
+                opts_parts = [p for p in re.split(r"\s+", opts.strip()) if p]
+                for opt in opts_parts:
+                    opt_lower = opt.lower()
+                    if opt_lower.startswith("in="):
+                        flag = opt.split("=", 1)[1].strip()
+                        if not flag:
+                            return [UnknownBlockStep(
+                                code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
+                                message=f"Malformed IN= option in MERGE: '{opt}'",
+                                loc=merge_stmt.loc,
+                            )]
+                        if flag in in_flags:
+                            return [UnknownBlockStep(
+                                code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
+                                message=f"Duplicate IN= flag '{flag}' in MERGE.",
+                                loc=merge_stmt.loc,
+                            )]
+                        in_flags.add(flag)
+                        in_flag = flag
+                    else:
+                        return [UnknownBlockStep(
+                            code="SANS_PARSE_MERGE_STATEMENT_MALFORMED",
+                            message=f"Unsupported MERGE option '{opt}'",
+                            loc=merge_stmt.loc,
+                        )]
+            input_specs.append({"table": table_name, "in": in_flag})
+
+    by_vars: list[str] = []
+    if by_statements:
+        by_stmt = by_statements[0]
+        by_match = re.match(r"by\s+(.+)", by_stmt.text.lower())
+        if not by_match:
+            return [UnknownBlockStep(
+                code="SANS_PARSE_BY_STATEMENT_MALFORMED",
+                message=f"Malformed BY statement: '{by_stmt.text}'",
+                loc=by_stmt.loc,
+            )]
+        by_vars = [v for v in re.split(r"\s+", by_match.group(1).strip()) if v]
+
+    retain_vars: list[str] = []
+    if retain_statements:
+        retain_stmt = retain_statements[0]
+        retain_body = retain_stmt.text[len("retain "):].strip()
+        if not retain_body:
+            return [UnknownBlockStep(
+                code="SANS_PARSE_RETAIN_STATEMENT_MALFORMED",
+                message=f"Malformed RETAIN statement: '{retain_stmt.text}'",
+                loc=retain_stmt.loc,
+            )]
+        retain_vars = [v for v in re.split(r"\s+", retain_body) if v]
+
+    keep_vars: list[str] = []
+    if keep_statements:
+        keep_stmt = keep_statements[0]
+        keep_body = keep_stmt.text[len("keep "):].strip()
+        if not keep_body:
+            return [UnknownBlockStep(
+                code="SANS_PARSE_KEEP_STATEMENT_MALFORMED",
+                message=f"Malformed KEEP statement: '{keep_stmt.text}'",
+                loc=keep_stmt.loc,
+            )]
+        keep_vars = [v for v in re.split(r"\s+", keep_body) if v]
+
+    # Parse executable statements in order.
+    statements: list[dict[str, Any]] = []
+    explicit_output = False
+    needs_by = False
+    pending_if: Optional[dict[str, Any]] = None
+
+    assignment_regex = re.compile(r"^([a-zA-Z_]\w*)\s*=\s*(.+)$")
+
+    def parse_action(action_text: str, loc: Loc) -> dict[str, Any] | UnknownBlockStep:
+        nonlocal needs_by
+        action = action_text.strip()
+        action_lower = action.lower()
+        if action_lower.startswith("output"):
+            if action_lower != "output":
+                return UnknownBlockStep(
+                    code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+                    message=f"Unsupported OUTPUT form: '{action_text}'",
+                    loc=loc,
+                )
+            return {"type": "output"}
+        assign_match = assignment_regex.match(action)
+        if assign_match:
+            col_name = assign_match.group(1)
+            expr_str = assign_match.group(2)
+            try:
+                expr_ast = parse_expression_from_string(expr_str, block.header.loc.file)
+            except ValueError as e:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_EXPRESSION_ERROR",
+                    message=f"Error parsing assignment expression for '{col_name}': {e}",
+                    loc=loc,
+                )
+            if _expr_uses_by_flag(expr_ast):
+                needs_by = True
+            return {"type": "assign", "target": col_name, "expr": expr_ast}
+        return UnknownBlockStep(
+            code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+            message=f"Unsupported statement in data step: '{action_text}'",
+            loc=loc,
+        )
+
+    def find_forbidden_token_stateful(stmt_text: str) -> Optional[str]:
+        s = stmt_text.strip().lower()
+        if not s:
+            return None
+        if s.startswith("%"):
+            return "%"
+        if _starts_with_token(s, "proc"):
+            return "proc"
+        if _starts_with_token(s, "do"):
+            return "do"
+        if _starts_with_token(s, "end"):
+            return "end"
+        if _starts_with_token(s, "lag", extra_follow="("):
+            return "lag"
+        if _starts_with_token(s, "array"):
+            return "array"
+        if _starts_with_token(s, "call"):
+            return "call"
+        if _starts_with_token(s, "infile"):
+            return "infile"
+        if _starts_with_token(s, "input"):
+            return "input"
+        return None
+
+    for stmt in block.body:
+        s = stmt.text.strip()
+        s_lower = s.lower()
+
+        token = find_forbidden_token_stateful(s)
+        if token:
+            return [UnknownBlockStep(
+                code="SANS_BLOCK_STATEFUL_TOKEN",
+                message=(
+                    f"Forbidden token '{token}' detected in data step: '{stmt.text}'. "
+                    "Hint: this subset does not support macros, do/end blocks, arrays, or lag."
+                ),
+                loc=block.loc_span,
+            )]
+
+        if s_lower.startswith("set ") or s_lower.startswith("merge "):
+            continue
+        if s_lower.startswith("by "):
+            continue
+        if s_lower.startswith("retain "):
+            continue
+        if s_lower.startswith("keep "):
+            continue
+
+        if pending_if and not s_lower.startswith("else "):
+            pending_if = None
+
+        if s_lower.startswith("if "):
+            if " then " in s_lower:
+                match = re.match(r"if\s+(.+?)\s+then\s+(.+)$", s, re.IGNORECASE)
+                if not match:
+                    return [UnknownBlockStep(
+                        code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+                        message=f"Malformed IF/THEN statement: '{stmt.text}'",
+                        loc=stmt.loc,
+                    )]
+                predicate_str = match.group(1)
+                action_str = match.group(2)
+                try:
+                    predicate_ast = parse_expression_from_string(predicate_str, block.header.loc.file)
+                except ValueError as e:
+                    return [UnknownBlockStep(
+                        code="SANS_PARSE_EXPRESSION_ERROR",
+                        message=f"Error parsing IF predicate: {e}",
+                        loc=stmt.loc,
+                    )]
+                if _expr_uses_by_flag(predicate_ast):
+                    needs_by = True
+                action = parse_action(action_str, stmt.loc)
+                if isinstance(action, UnknownBlockStep):
+                    return [action]
+                if action.get("type") == "output":
+                    explicit_output = True
+                if_stmt = {"type": "if_then", "predicate": predicate_ast, "then": action, "else": None}
+                statements.append(if_stmt)
+                pending_if = if_stmt
+                continue
+            predicate_str = s[len("if "):].strip()
+            try:
+                predicate_ast = parse_expression_from_string(predicate_str, block.header.loc.file)
+            except ValueError as e:
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_EXPRESSION_ERROR",
+                    message=f"Error parsing IF predicate: {e}",
+                    loc=stmt.loc,
+                )]
+            if _expr_uses_by_flag(predicate_ast):
+                needs_by = True
+            statements.append({"type": "filter", "predicate": predicate_ast})
+            continue
+
+        if s_lower.startswith("else "):
+            if not pending_if:
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+                    message=f"ELSE without matching IF: '{stmt.text}'",
+                    loc=stmt.loc,
+                )]
+            if pending_if.get("else") is not None:
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+                    message=f"Multiple ELSE clauses for IF: '{stmt.text}'",
+                    loc=stmt.loc,
+                )]
+            action_str = s[len("else "):].strip()
+            if action_str.lower().startswith("if "):
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+                    message=f"ELSE IF not supported in data step: '{stmt.text}'",
+                    loc=stmt.loc,
+                )]
+            action = parse_action(action_str, stmt.loc)
+            if isinstance(action, UnknownBlockStep):
+                return [action]
+            if action.get("type") == "output":
+                explicit_output = True
+            pending_if["else"] = action
+            pending_if = None
+            continue
+
+        if s_lower.startswith("output"):
+            if s_lower != "output":
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+                    message=f"Unsupported OUTPUT form: '{stmt.text}'",
+                    loc=stmt.loc,
+                )]
+            explicit_output = True
+            statements.append({"type": "output"})
+            continue
+
+        # Assignment
+        assign_match = assignment_regex.match(s)
+        if assign_match:
+            col_name = assign_match.group(1)
+            expr_str = assign_match.group(2)
+            try:
+                expr_ast = parse_expression_from_string(expr_str, block.header.loc.file)
+            except ValueError as e:
+                return [UnknownBlockStep(
+                    code="SANS_PARSE_EXPRESSION_ERROR",
+                    message=f"Error parsing assignment expression for '{col_name}': {e}",
+                    loc=stmt.loc,
+                )]
+            if _expr_uses_by_flag(expr_ast):
+                needs_by = True
+            statements.append({"type": "assign", "target": col_name, "expr": expr_ast})
+            continue
+
+        return [UnknownBlockStep(
+            code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM",
+            message=(
+                f"Unsupported statement or unparsed content in data step: '{stmt.text}'. "
+                "Hint: only assignment, if/then/else, output, retain, keep, by, set/merge are supported."
+            ),
+            loc=block.loc_span,
+        )]
+
+    if (mode == "merge" or needs_by) and not by_vars:
+        return [UnknownBlockStep(
+            code="SANS_PARSE_DATASTEP_MISSING_BY",
+            message="Data step uses MERGE/first./last. and requires a BY statement.",
+            loc=block.loc_span,
+        )]
+
+    return [
+        OpStep(
+            op="data_step",
+            inputs=[spec["table"] for spec in input_specs],
+            outputs=[final_output_table],
+            params={
+                "mode": mode,
+                "inputs": input_specs,
+                "by": by_vars,
+                "retain": retain_vars,
+                "keep": keep_vars,
+                "statements": statements,
+                "explicit_output": explicit_output,
+            },
+            loc=block.loc_span,
+        )
+    ]
 
 
 def recognize_proc_sort_block(block: Block) -> OpStep | UnknownBlockStep:

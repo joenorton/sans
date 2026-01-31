@@ -10,8 +10,10 @@ from ._loc import Loc # For error reporting, though for expr AST, Loc might be m
 TOKEN_PATTERNS = [
     (r"\s+", None), # Whitespace to ignore - MUST be first
     (r"\"[^\"]*\"|\'[^\']*\'", "STRING"), # String literals (double or single quotes) - Moved higher
+    (r"\b(first|last)\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # BY-group flags
     (r"\b(and|or|not)\b", "KEYWORD_LOGICAL"),
     (r"\b(coalesce|if)\b", "KEYWORD_FUNCTION"), # Allowlisted functions
+    (r"\b(ne|eq|lt|le|gt|ge)\b", "OPERATOR"), # SAS-style comparison keywords
     (r"\bnull\b|\.", "NULL"), # Null literal (handle both 'null' keyword and '.' for SAS)
     (r"\b[a-zA-Z_]\w*\b", "IDENTIFIER"), # Column references / variable names
     (r"\d+(?:\.\d*)?", "NUMBER"), # Numeric literals (int or float)
@@ -67,6 +69,7 @@ PRECEDENCE = {
     'and': 2,
     'not': 3, # Unary operator
     '=': 4, '<': 4, '>': 4, '<=': 4, '>=': 4, '^=': 4, '~=': 4,
+    'ne': 4, 'eq': 4, 'lt': 4, 'le': 4, 'gt': 4, 'ge': 4,
     '+': 5, '-': 5,
     '*': 6, '/': 6,
 }
@@ -177,7 +180,17 @@ class Parser:
                     args.append(right_expr)
                 left_expr = boolop(op_value_lower, args)
             else:
-                op_norm = "!=" if op_value_lower in ["^=", "~="] else op_value_lower
+                op_map = {
+                    "^=": "!=",
+                    "~=": "!=",
+                    "ne": "!=",
+                    "eq": "=",
+                    "lt": "<",
+                    "le": "<=",
+                    "gt": ">",
+                    "ge": ">=",
+                }
+                op_norm = op_map.get(op_value_lower, op_value_lower)
                 left_expr = binop(op_norm, left_expr, right_expr)
             
         return left_expr

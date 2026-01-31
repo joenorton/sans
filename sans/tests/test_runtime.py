@@ -63,13 +63,14 @@ def test_run_hello_world(tmp_path):
     ]
 
 
-def test_run_unsupported_op_fails(tmp_path):
+def test_run_proc_sort_ok(tmp_path):
     in_csv = tmp_path / "in.csv"
     _write_csv(
         in_csv,
         [
             ["a", "b"],
-            ["1", "10"],
+            ["2", "x"],
+            ["1", "y"],
         ],
     )
 
@@ -83,14 +84,24 @@ def test_run_unsupported_op_fails(tmp_path):
 
     report = run_script(
         text=script,
-        file_name="unsupported.sas",
+        file_name="sort.sas",
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
     )
 
-    assert report["status"] == "failed"
-    assert report["primary_error"]["code"] == "SANS_CAP_UNSUPPORTED_OP"
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["a", "b"]
+    assert rows[1:] == [
+        ["1", "y"],
+        ["2", "x"],
+    ]
 
 
 def test_run_unsupported_expr_node_fails(tmp_path):
@@ -144,3 +155,756 @@ def test_run_missing_input_file_fails(tmp_path):
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_INPUT_NOT_FOUND"
+
+
+def test_run_merge_by_carries_values(tmp_path):
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    _write_csv(
+        a_csv,
+        [
+            ["id", "aval"],
+            ["1", "10"],
+            ["2", "20"],
+        ],
+    )
+    _write_csv(
+        b_csv,
+        [
+            ["id", "bval"],
+            ["1", "100"],
+            ["1", "101"],
+            ["2", "200"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=a out=a_s;",
+            "  by id;",
+            "run;",
+            "proc sort data=b out=b_s;",
+            "  by id;",
+            "run;",
+            "data out;",
+            "  merge a_s(in=ina) b_s(in=inb);",
+            "  by id;",
+            "  if ina and inb;",
+            "  keep id aval bval;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="merge.sas",
+        bindings={"a": str(a_csv), "b": str(b_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "aval", "bval"]
+    assert rows[1:] == [
+        ["1", "10", "100"],
+        ["1", "10", "101"],
+        ["2", "20", "200"],
+    ]
+
+
+def test_run_by_first_outputs_only_first(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "seq"],
+            ["1", "1"],
+            ["1", "2"],
+            ["2", "1"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=in out=sorted;",
+            "  by id seq;",
+            "run;",
+            "data out;",
+            "  set sorted;",
+            "  by id;",
+            "  if first.id then output;",
+            "  keep id seq;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="first.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "seq"]
+    assert rows[1:] == [
+        ["1", "1"],
+        ["2", "1"],
+    ]
+
+
+def test_run_if_then_else_with_ne(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "val"],
+            ["1", "0"],
+            ["2", "5"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  if val ne 0 then flag = 1;",
+            "  else flag = .;",
+            "  keep id val flag;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="if_then.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "val", "flag"]
+    assert rows[1:] == [
+        ["1", "0", ""],
+        ["2", "5", "1"],
+    ]
+
+
+def test_run_filter_on_last_flag(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "seq"],
+            ["1", "1"],
+            ["1", "2"],
+            ["2", "1"],
+            ["2", "2"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=in out=sorted;",
+            "  by id seq;",
+            "run;",
+            "data out;",
+            "  set sorted;",
+            "  by id;",
+            "  if last.id;",
+            "  keep id seq;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="last_flag.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "seq"]
+    assert rows[1:] == [
+        ["1", "2"],
+        ["2", "2"],
+    ]
+
+
+def test_run_comparison_keywords_in_filter(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["a", "b", "c"],
+            ["1", "0", "4"],
+            ["2", "-1", "3"],
+            ["3", "1", "5"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  if a eq 2 or b lt 0 or c ge 5;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="compare_keywords.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["a", "b", "c"]
+    assert rows[1:] == [
+        ["2", "-1", "3"],
+        ["3", "1", "5"],
+    ]
+
+
+def test_run_sort_is_stable(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["a", "b"],
+            ["1", "first"],
+            ["1", "second"],
+            ["1", "third"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=in out=out;",
+            "  by a;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="stable_sort.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["a", "b"]
+    assert rows[1:] == [
+        ["1", "first"],
+        ["1", "second"],
+        ["1", "third"],
+    ]
+
+
+def test_run_retain_persists_values(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "val"],
+            ["1", "10"],
+            ["2", "15"],
+            ["3", "20"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  retain prev;",
+            "  diff = val - prev;",
+            "  prev = val;",
+            "  keep id val prev diff;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="retain.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "val", "prev", "diff"]
+    assert rows[1:] == [
+        ["1", "10", "10", ""],
+        ["2", "15", "15", "5"],
+        ["3", "20", "20", "5"],
+    ]
+
+
+def test_run_missing_comparison_filters_out(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "val"],
+            ["1", ""],
+            ["2", "1"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  if val > 0;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="missing_compare.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "val"]
+    assert rows[1:] == [
+        ["2", "1"],
+    ]
+
+
+def test_run_is_deterministic(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "val"],
+            ["2", "20"],
+            ["1", "10"],
+            ["1", "11"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=in out=sorted;",
+            "  by id;",
+            "run;",
+            "data out;",
+            "  set sorted;",
+            "  keep val id;",
+            "run;",
+        ]
+    )
+
+    out_a = tmp_path / "out_a"
+    out_b = tmp_path / "out_b"
+
+    report_a = run_script(
+        text=script,
+        file_name="determinism.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=out_a,
+        strict=True,
+    )
+    report_b = run_script(
+        text=script,
+        file_name="determinism.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=out_b,
+        strict=True,
+    )
+
+    assert report_a["status"] == "ok"
+    assert report_b["status"] == "ok"
+
+    out_csv_a = out_a / "out.csv"
+    out_csv_b = out_b / "out.csv"
+    assert out_csv_a.exists()
+    assert out_csv_b.exists()
+
+    with out_csv_a.open("r", encoding="utf-8", newline="") as f:
+        rows_a = list(csv.reader(f))
+    with out_csv_b.open("r", encoding="utf-8", newline="") as f:
+        rows_b = list(csv.reader(f))
+
+    assert rows_a == rows_b
+
+
+def test_run_keep_preserves_column_order(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["a", "b", "c"],
+            ["1", "2", "3"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  keep c a;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="keep_order.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["c", "a"]
+    assert rows[1:] == [["3", "1"]]
+
+
+def test_run_merge_in_flags(tmp_path):
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    _write_csv(
+        a_csv,
+        [
+            ["id", "aval"],
+            ["1", "10"],
+            ["2", "20"],
+        ],
+    )
+    _write_csv(
+        b_csv,
+        [
+            ["id", "bval"],
+            ["1", "100"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=a out=a_s;",
+            "  by id;",
+            "run;",
+            "proc sort data=b out=b_s;",
+            "  by id;",
+            "run;",
+            "data out;",
+            "  merge a_s(in=ina) b_s(in=inb);",
+            "  by id;",
+            "  keep id ina inb;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="merge_flags.sas",
+        bindings={"a": str(a_csv), "b": str(b_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "ina", "inb"]
+    assert rows[1:] == [
+        ["1", "True", "True"],
+        ["2", "True", "False"],
+    ]
+
+
+def test_run_by_group_multikey_last(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "testcd", "dt"],
+            ["1", "A", "2023-01-01"],
+            ["1", "A", "2023-01-02"],
+            ["1", "B", "2023-01-01"],
+            ["2", "A", "2023-01-03"],
+            ["2", "A", "2023-01-04"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=in out=sorted;",
+            "  by id testcd dt;",
+            "run;",
+            "data out;",
+            "  set sorted;",
+            "  by id testcd;",
+            "  if last.testcd then output;",
+            "  keep id testcd dt;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="by_multikey.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "testcd", "dt"]
+    assert rows[1:] == [
+        ["1", "A", "2023-01-02"],
+        ["1", "B", "2023-01-01"],
+        ["2", "A", "2023-01-04"],
+    ]
+
+
+def test_run_explicit_output_suppresses_default(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "val"],
+            ["1", "0"],
+            ["2", "5"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  if val > 0 then output;",
+            "  keep id val;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="explicit_output.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "val"]
+    assert rows[1:] == [
+        ["2", "5"],
+    ]
+
+
+def test_run_missing_arithmetic_yields_missing(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "val"],
+            ["1", ""],
+            ["2", "3"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  x = val + 1;",
+            "  keep id x;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="missing_math.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[0] == ["id", "x"]
+    assert rows[1:] == [
+        ["1", ""],
+        ["2", "4"],
+    ]
+
+
+def test_run_unsorted_by_fails_in_runtime(tmp_path):
+    in_csv = tmp_path / "in.csv"
+    _write_csv(
+        in_csv,
+        [
+            ["id", "seq"],
+            ["2", "1"],
+            ["1", "1"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "data out;",
+            "  set in;",
+            "  by id;",
+            "  if first.id then output;",
+            "  keep id seq;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="unsorted_runtime.sas",
+        bindings={"in": str(in_csv)},
+        out_dir=tmp_path,
+        strict=False,
+    )
+
+    assert report["status"] == "refused"
+    primary = report["primary_error"]
+    assert primary["code"] == "SANS_VALIDATE_ORDER_REQUIRED"
+    assert primary["loc"]["file"] == "unsorted_runtime.sas"
+
+
+def test_run_merge_many_to_many_fails(tmp_path):
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    _write_csv(
+        a_csv,
+        [
+            ["id", "aval"],
+            ["1", "10"],
+            ["1", "20"],
+        ],
+    )
+    _write_csv(
+        b_csv,
+        [
+            ["id", "bval"],
+            ["1", "100"],
+            ["1", "200"],
+            ["1", "300"],
+        ],
+    )
+
+    script = "\n".join(
+        [
+            "proc sort data=a out=a_s;",
+            "  by id;",
+            "run;",
+            "proc sort data=b out=b_s;",
+            "  by id;",
+            "run;",
+            "data out;",
+            "  merge a_s(in=ina) b_s(in=inb);",
+            "  by id;",
+            "  if ina and inb;",
+            "  keep id aval bval;",
+            "run;",
+        ]
+    )
+
+    report = run_script(
+        text=script,
+        file_name="merge_many.sas",
+        bindings={"a": str(a_csv), "b": str(b_csv)},
+        out_dir=tmp_path,
+        strict=True,
+    )
+
+    assert report["status"] == "failed"
+    primary = report["primary_error"]
+    assert primary["code"] == "SANS_RUNTIME_MERGE_MANY_MANY"
+    assert primary["loc"]["file"] == "merge_many.sas"
