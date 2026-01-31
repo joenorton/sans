@@ -55,6 +55,136 @@ def _split_tokens_outside_parens(text: str) -> list[str]:
     return tokens
 
 
+def _split_sql_list(text: str) -> list[str]:
+    items: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    in_sq = False
+    in_dq = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "'" and not in_dq:
+            in_sq = not in_sq
+        elif ch == '"' and not in_sq:
+            in_dq = not in_dq
+        elif not in_sq and not in_dq:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth = max(0, depth - 1)
+            elif ch == "," and depth == 0:
+                item = "".join(buf).strip()
+                if item:
+                    items.append(item)
+                buf = []
+                i += 1
+                continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        item = "".join(buf).strip()
+        if item:
+            items.append(item)
+    return items
+
+
+def _find_keyword_outside(text: str, keyword: str) -> int:
+    lower = text.lower()
+    kw = keyword.lower()
+    depth = 0
+    in_sq = False
+    in_dq = False
+    i = 0
+    while i <= len(text) - len(kw):
+        ch = text[i]
+        if ch == "'" and not in_dq:
+            in_sq = not in_sq
+        elif ch == '"' and not in_sq:
+            in_dq = not in_dq
+        elif not in_sq and not in_dq:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth = max(0, depth - 1)
+            if depth == 0 and lower.startswith(kw, i):
+                before = text[i - 1] if i > 0 else " "
+                after = text[i + len(kw)] if i + len(kw) < len(text) else " "
+                if before.isspace() and after.isspace():
+                    return i
+        i += 1
+    return -1
+
+
+def _parse_sql_table_spec(spec_text: str, loc: Loc) -> dict[str, str] | UnknownBlockStep:
+    parts = [p for p in spec_text.strip().split() if p]
+    if not parts:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_TABLE_MALFORMED",
+            message="Empty table spec in PROC SQL.",
+            loc=loc,
+        )
+    if len(parts) == 1:
+        table = parts[0].lower()
+        return {"table": table, "alias": table}
+    if len(parts) == 2:
+        if parts[0].lower() == "as":
+            return UnknownBlockStep(
+                code="SANS_PARSE_SQL_TABLE_MALFORMED",
+                message=f"Malformed table alias in '{spec_text}'",
+                loc=loc,
+            )
+        return {"table": parts[0].lower(), "alias": parts[1].lower()}
+    if len(parts) == 3 and parts[1].lower() == "as":
+        return {"table": parts[0].lower(), "alias": parts[2].lower()}
+    return UnknownBlockStep(
+        code="SANS_PARSE_SQL_TABLE_MALFORMED",
+        message=f"Malformed table alias in '{spec_text}'",
+        loc=loc,
+    )
+
+
+def _parse_sql_select_item(item_text: str, loc: Loc) -> dict[str, Any] | UnknownBlockStep:
+    s = item_text.strip()
+    alias = None
+    alias_match = re.match(r"(.+?)\s+as\s+([a-zA-Z_]\w*)$", s, re.IGNORECASE)
+    if alias_match:
+        s = alias_match.group(1).strip()
+        alias = alias_match.group(2).lower()
+
+    agg_match = re.match(r"(count|sum|min|max|avg)\s*\((.*)\)$", s, re.IGNORECASE)
+    if agg_match:
+        func = agg_match.group(1).lower()
+        arg = agg_match.group(2).strip()
+        if func == "count" and arg == "*":
+            arg = "*"
+        else:
+            if not arg or arg == "*":
+                return UnknownBlockStep(
+                    code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+                    message=f"Malformed aggregate expression '{item_text}'",
+                    loc=loc,
+                )
+            arg = arg.lower()
+        if not alias:
+            if arg == "*":
+                alias = func
+            else:
+                alias = f"{func}_{arg.split('.')[-1]}"
+        return {"type": "agg", "func": func, "arg": arg, "alias": alias}
+
+    if not re.match(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)?$", s):
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message=f"Unsupported select expression '{item_text}'",
+            loc=loc,
+        )
+    col_name = s.lower()
+    if not alias:
+        alias = col_name.split(".")[-1]
+    return {"type": "col", "name": col_name, "alias": alias}
+
+
 def _parse_dataset_spec(spec_text: str, loc: Loc, allow_in_flag: bool) -> dict[str, Any] | UnknownBlockStep:
     s = spec_text.strip()
     if not s:
@@ -1168,5 +1298,233 @@ def recognize_proc_transpose_block(block: Block) -> OpStep | UnknownBlockStep:
         inputs=[input_table],
         outputs=[output_table],
         params={"by": by_vars, "id": id_var, "var": var_var, "last_wins": True},
+        loc=block.loc_span,
+    )
+
+
+def recognize_proc_sql_block(block: Block) -> OpStep | UnknownBlockStep:
+    if not block.header.text.lower().startswith("proc sql"):
+        return UnknownBlockStep(
+            code="SANS_PARSE_INVALID_PROC_SQL_HEADER",
+            message=f"Expected PROC SQL block to start with 'proc sql', got '{block.header.text}'",
+            loc=block.header.loc,
+        )
+
+    create_statements = [s for s in block.body if s.text.lower().startswith("create table")]
+    other_statements = [
+        s for s in block.body
+        if not s.text.lower().startswith("create table")
+        and s.text.lower() != "quit"
+    ]
+    if other_statements:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message=f"Unsupported PROC SQL statement: '{other_statements[0].text}'",
+            loc=other_statements[0].loc,
+        )
+    if len(create_statements) != 1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message="PROC SQL must contain exactly one CREATE TABLE AS SELECT statement.",
+            loc=block.loc_span,
+        )
+
+    stmt = create_statements[0]
+    stmt_text = stmt.text.strip()
+    create_match = re.match(
+        r"create\s+table\s+(\S+)\s+as\s+select\s+(.+)$",
+        stmt_text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not create_match:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message=f"Malformed CREATE TABLE AS SELECT statement: '{stmt_text}'",
+            loc=stmt.loc,
+        )
+
+    out_table = create_match.group(1).lower()
+    remainder = create_match.group(2).strip()
+
+    from_idx = _find_keyword_outside(remainder, "from")
+    if from_idx == -1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message="PROC SQL SELECT missing FROM clause.",
+            loc=stmt.loc,
+        )
+
+    select_clause = remainder[:from_idx].strip()
+    remainder = remainder[from_idx + len("from"):].strip()
+
+    where_idx = _find_keyword_outside(remainder, "where")
+    group_idx = _find_keyword_outside(remainder, "group by")
+    if group_idx != -1 and where_idx != -1 and group_idx < where_idx:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message="GROUP BY must appear after WHERE in PROC SQL.",
+            loc=stmt.loc,
+        )
+
+    cut_points = [idx for idx in [where_idx, group_idx] if idx != -1]
+    from_end = min(cut_points) if cut_points else len(remainder)
+    from_clause = remainder[:from_end].strip()
+
+    where_clause = None
+    if where_idx != -1:
+        where_start = where_idx + len("where")
+        where_end = group_idx if group_idx != -1 else len(remainder)
+        where_clause = remainder[where_start:where_end].strip()
+
+    group_clause = None
+    if group_idx != -1:
+        group_start = group_idx + len("group by")
+        group_clause = remainder[group_start:].strip()
+
+    if not select_clause:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message="PROC SQL SELECT list is empty.",
+            loc=stmt.loc,
+        )
+
+    select_items: list[dict[str, Any]] = []
+    for item in _split_sql_list(select_clause):
+        parsed = _parse_sql_select_item(item, stmt.loc)
+        if isinstance(parsed, UnknownBlockStep):
+            return parsed
+        select_items.append(parsed)
+
+    if not from_clause:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message="PROC SQL FROM clause is empty.",
+            loc=stmt.loc,
+        )
+
+    join_keywords = ["left join", "inner join"]
+    join_start = -1
+    for kw in join_keywords:
+        idx = _find_keyword_outside(from_clause, kw)
+        if idx != -1 and (join_start == -1 or idx < join_start):
+            join_start = idx
+    if join_start == -1 and _find_keyword_outside(from_clause, "join") != -1:
+        return UnknownBlockStep(
+            code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+            message="JOIN clauses require explicit INNER or LEFT keyword.",
+            loc=stmt.loc,
+        )
+    base_spec_text = from_clause if join_start == -1 else from_clause[:join_start].strip()
+    base_spec = _parse_sql_table_spec(base_spec_text, stmt.loc)
+    if isinstance(base_spec, UnknownBlockStep):
+        return base_spec
+
+    joins: list[dict[str, Any]] = []
+    remaining = from_clause[join_start:].strip() if join_start != -1 else ""
+    while remaining:
+        remaining_lower = remaining.lower()
+        if remaining_lower.startswith("left join"):
+            join_type = "left"
+            remaining = remaining[len("left join"):].strip()
+        elif remaining_lower.startswith("inner join"):
+            join_type = "inner"
+            remaining = remaining[len("inner join"):].strip()
+        else:
+            return UnknownBlockStep(
+                code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+                message="JOIN clauses require explicit INNER or LEFT keyword.",
+                loc=stmt.loc,
+            )
+
+        on_idx = _find_keyword_outside(remaining, "on")
+        if on_idx == -1:
+            return UnknownBlockStep(
+                code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+                message="JOIN clause missing ON expression.",
+                loc=stmt.loc,
+            )
+        table_spec_text = remaining[:on_idx].strip()
+        on_and_rest = remaining[on_idx + len("on"):].strip()
+
+        next_join = -1
+        for kw in join_keywords:
+            idx = _find_keyword_outside(on_and_rest, kw)
+            if idx != -1 and (next_join == -1 or idx < next_join):
+                next_join = idx
+        on_expr_text = on_and_rest if next_join == -1 else on_and_rest[:next_join].strip()
+        remaining = "" if next_join == -1 else on_and_rest[next_join:].strip()
+
+        join_spec = _parse_sql_table_spec(table_spec_text, stmt.loc)
+        if isinstance(join_spec, UnknownBlockStep):
+            return join_spec
+        try:
+            on_expr = parse_expression_from_string(on_expr_text, stmt.loc.file)
+        except ValueError as e:
+            return UnknownBlockStep(
+                code="SANS_PARSE_EXPRESSION_ERROR",
+                message=f"Error parsing JOIN ON predicate: {e}",
+                loc=stmt.loc,
+            )
+        joins.append(
+            {
+                "type": join_type,
+                "table": join_spec["table"],
+                "alias": join_spec["alias"],
+                "on": on_expr,
+            }
+        )
+
+    where_expr = None
+    if where_clause:
+        try:
+            where_expr = parse_expression_from_string(where_clause, stmt.loc.file)
+        except ValueError as e:
+            return UnknownBlockStep(
+                code="SANS_PARSE_EXPRESSION_ERROR",
+                message=f"Error parsing WHERE predicate: {e}",
+                loc=stmt.loc,
+            )
+
+    group_by: list[str] = []
+    if group_clause:
+        group_by = [g.strip().lower() for g in _split_sql_list(group_clause)]
+
+    non_agg_cols = [item["name"] for item in select_items if item["type"] == "col"]
+    agg_items = [item for item in select_items if item["type"] == "agg"]
+    if group_by:
+        for col in non_agg_cols:
+            if col not in group_by:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+                    message="Non-aggregate columns in SELECT must appear in GROUP BY.",
+                    loc=stmt.loc,
+                )
+        for col in group_by:
+            if col not in non_agg_cols:
+                return UnknownBlockStep(
+                    code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+                    message="GROUP BY columns must appear in SELECT.",
+                    loc=stmt.loc,
+                )
+    else:
+        if agg_items and non_agg_cols:
+            return UnknownBlockStep(
+                code="SANS_PARSE_SQL_UNSUPPORTED_FORM",
+                message="SELECT with aggregates requires GROUP BY for non-aggregate columns.",
+                loc=stmt.loc,
+            )
+
+    inputs = [base_spec["table"]] + [j["table"] for j in joins]
+    return OpStep(
+        op="sql_select",
+        inputs=inputs,
+        outputs=[out_table],
+        params={
+            "from": base_spec,
+            "joins": joins,
+            "select": select_items,
+            "where": where_expr,
+            "group_by": group_by,
+        },
         loc=block.loc_span,
     )

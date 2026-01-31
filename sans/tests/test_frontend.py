@@ -85,12 +85,10 @@ def test_mixed_quotes_and_comments():
     assert "/* not a comment */" in statements[1].text
     assert statements[2].text == "quit"
 
-def test_refuses_proc_sql():
+def test_proc_sql_no_refusal():
     script = "proc sql;\n  select * from dm;\nquit;"
     refusal = detect_refusal(script, "test.sas")
-    assert refusal is not None
-    assert refusal.code == "SANS_PARSE_SQL_DETECTED"
-    assert refusal.loc == Loc("test.sas", 1, 1)
+    assert refusal is None
 
 def test_segment_data_and_proc_blocks():
     script = ("data mydata;\n"

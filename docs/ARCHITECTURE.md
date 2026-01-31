@@ -178,6 +178,7 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 * `filter` (predicate AST)
 * `sort` (stable, null order explicit)
 * `group_agg` (means/freq-like)
+* `sql_select` (proc sql subset)
 * `join` (strict keys + dup policy)
 * `concat_rows`
 * `deduplicate`
@@ -194,6 +195,7 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 
   * `set`/`merge` with `by`, `retain`, `first./last.`, `output`, `if/then/else`, `keep`, and `in=` flags
 * `proc transpose` (by/id/var)
+* `proc sql` subset (create table as select with inner/left joins, where, group by, aggregates)
 * `proc compare` with `id` required
 * `proc means` basic stats via `class/var` (strict allowlist)
 * `proc freq` minimal (one-way) if you must; otherwise defer
@@ -201,7 +203,7 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 hard-fail tokens/constructs (v0.1):
 
 * macro language (`%macro`, `%do`, `%if`, `%include`, etc.)
-* `proc sql`
+* `proc sql` forms outside the supported subset
 * data step features still unsupported: `lag`, `do/end` blocks, arrays
 * io-ish statements: `infile`, `input`, `put`, `call execute`
 

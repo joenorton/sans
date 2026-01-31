@@ -20,6 +20,7 @@ def test_parse_column_ref():
     assert parse_expression_from_string("col_1") == col("col_1")
     assert parse_expression_from_string("first.subjid") == col("first.subjid")
     assert parse_expression_from_string("last.visit") == col("last.visit")
+    assert parse_expression_from_string("a.col") == col("a.col")
 
 def test_parse_binary_operators_precedence():
     # x = a + b * 2 parses as a + (b*2)

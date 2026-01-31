@@ -18,6 +18,7 @@ Supported subset (current):
 - data steps: `set`/`merge` with assignments, `if`, `keep/drop/rename`, BY-group flags, retain, and dataset options (`keep/drop/rename/where`, `in=` on merge)
 - `proc sort`
 - `proc transpose` (by/id/var)
+- `proc sql` subset (create table as select with inner/left joins, where, group by, aggregates)
 - `validate --profile sdtm` (DM/AE/LB rulepack)
 
 ### Minimal example

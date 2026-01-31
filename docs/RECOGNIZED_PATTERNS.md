@@ -8,6 +8,7 @@ Scope (v0.1)
 - `data ...; set/merge ...; ... run;`
 - `proc sort data=... out=...; by ...; run;`
 - `proc transpose data=... out=...; by ...; id ...; var ...; run;`
+- `proc sql; create table ... as select ... from ... [join ...] [where ...] [group by ...]; quit;`
 
 Block segmentation (summary)
 - Blocks start at `data` or `proc` statements.
@@ -72,3 +73,10 @@ Proc transpose pattern (v0.1)
 - Header requires `data=` and `out=`; any other header option is refused.
 - Exactly one each: `by`, `id`, `var` statements.
 - Rows are grouped by BY keys; ID values become columns; VAR provides values.
+
+Proc sql pattern (v0.1)
+- Only `create table <out> as select ... from ...` is supported.
+- Join types: `inner join` or `left join` with `on` predicate (explicit keyword required).
+- Optional `where` and `group by` clauses.
+- Select list supports column refs + aggregates (count/sum/min/max/avg).
+- Group-by rule: non-aggregate select columns must appear in GROUP BY.

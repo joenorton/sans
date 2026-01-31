@@ -52,6 +52,19 @@ Transpose op (minimal subset)
   - `var`: value column name
   - `last_wins`: bool (when duplicate ID appears within a BY group)
 
+SQL select op (subset)
+- Op name: `sql_select`
+- Params:
+  - `from`: `{table, alias}` base table spec
+  - `joins`: list of `{type, table, alias, on}` (type is `inner` or `left`)
+  - `select`: list of `{type, name, alias}` for column refs and `{type, func, arg, alias}` for aggregates
+  - `where`: expression AST or null
+  - `group_by`: list of column names (possibly empty)
+- Semantics:
+  - Joins are evaluated left-to-right; `left` preserves base rows and fills unmatched right columns with nulls.
+  - `where` filters rows after joins.
+  - When `group_by` or aggregates are present, output is grouped by the keys and sorted by those keys for determinism.
+
 Determinism rules (v0.1)
 - `sort` is stable; null ordering is explicit in runtime settings.
 - Group output ordering (if/when added) must be explicit.

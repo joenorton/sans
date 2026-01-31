@@ -179,15 +179,6 @@ def detect_refusal(text: str, file_name: str = "<string>") -> Optional[Refusal]:
     v0.1 refusal detector: reject known-dangerous constructs early.
     byte-accurate line numbers: counts physical newlines in text.
     """
-    for idx, raw_line in enumerate(text.splitlines(), start=1):
-        s = raw_line.lstrip().lower()
-        # refuse proc sql (unambiguous, huge surface area)
-        if s.startswith("proc sql"):
-            return Refusal(
-                code="SANS_PARSE_SQL_DETECTED",
-                message="proc sql detected; unsupported in v0.1; refusing to execute",
-                loc=Loc(file_name, idx, idx),
-            )
     return None
 
 def segment_blocks(statements: list[Statement]) -> list[Block]:

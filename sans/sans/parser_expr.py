@@ -11,6 +11,7 @@ TOKEN_PATTERNS = [
     (r"\s+", None), # Whitespace to ignore - MUST be first
     (r"\"[^\"]*\"|\'[^\']*\'", "STRING"), # String literals (double or single quotes) - Moved higher
     (r"\b(first|last)\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # BY-group flags
+    (r"\b[a-zA-Z_]\w*\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # Qualified identifiers
     (r"\b(and|or|not)\b", "KEYWORD_LOGICAL"),
     (r"\b(coalesce|if)\b", "KEYWORD_FUNCTION"), # Allowlisted functions
     (r"\b(ne|eq|lt|le|gt|ge)\b", "OPERATOR"), # SAS-style comparison keywords

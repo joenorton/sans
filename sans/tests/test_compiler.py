@@ -23,12 +23,12 @@ def test_check_script_happy_path():
     assert exc_info.value.loc == Loc("test.sas", 7, 7) # Loc of the title statement
 
 def test_check_script_refuses_proc_sql():
-    script = "proc sql;\n  select * from dm;\nquit;"
+    script = "proc sql;\n  create table out as select * from (select * from dm);\nquit;"
     with pytest.raises(UnknownBlockStep) as exc_info:
         check_script(script, "test.sas")
-    assert exc_info.value.code == "SANS_PARSE_SQL_DETECTED"
-    assert "proc sql detected" in exc_info.value.message
-    assert exc_info.value.loc == Loc("test.sas", 1, 1)
+    assert exc_info.value.code == "SANS_PARSE_SQL_UNSUPPORTED_FORM"
+    assert "Unsupported" in exc_info.value.message or "unsupported" in exc_info.value.message
+    assert exc_info.value.loc == Loc("test.sas", 2, 2)
 
 def test_check_script_refuses_table_undefined():
     script = "data a;\n  set b;\nrun;"

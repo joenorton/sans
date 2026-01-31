@@ -72,13 +72,13 @@ def test_cli_check_refused_parse_exit_code():
         script = "\n".join(
             [
                 "proc sql;",
-                "  select * from dm;",
+                "  create table out as select * from (select * from dm);",
                 "quit;",
             ]
         )
         result = _run_check(script, temp_dir)
         assert result.returncode == 30
-        assert "SANS_PARSE_SQL_DETECTED" in result.stdout
+        assert "SANS_PARSE_SQL_UNSUPPORTED_FORM" in result.stdout
 
         report = json.loads((temp_dir / "report.json").read_text(encoding="utf-8"))
         assert report["status"] == "refused"

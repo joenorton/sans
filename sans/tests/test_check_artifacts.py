@@ -72,7 +72,7 @@ def test_emit_check_artifacts_refusal_plan_matches_report():
     script = "\n".join(
         [
             "proc sql;",
-            "  select * from dm;",
+            "  create table out as select * from (select * from dm);",
             "quit;",
         ]
     )

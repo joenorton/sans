@@ -258,6 +258,100 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any]) -> Any:
     )
 
 
+def _resolve_sql_column(name: str, row: Dict[str, Any], col_map: Dict[str, list[str]]) -> Any:
+    if "." in name:
+        key = name.lower()
+        if key not in row:
+            raise RuntimeFailure(
+                "SANS_RUNTIME_SQL_COLUMN_UNDEFINED",
+                f"Unknown column '{name}' in SQL expression.",
+            )
+        return row.get(key)
+    col_key = name.lower()
+    candidates = col_map.get(col_key, [])
+    if not candidates:
+        raise RuntimeFailure(
+            "SANS_RUNTIME_SQL_COLUMN_UNDEFINED",
+            f"Unknown column '{name}' in SQL expression.",
+        )
+    if len(candidates) > 1:
+        raise RuntimeFailure(
+            "SANS_RUNTIME_SQL_AMBIGUOUS_COLUMN",
+            f"Ambiguous column '{name}' in SQL expression; qualify the column.",
+        )
+    return row.get(candidates[0])
+
+
+def _eval_expr_sql(node: Dict[str, Any], row: Dict[str, Any], col_map: Dict[str, list[str]]) -> Any:
+    node_type = node.get("type")
+    if node_type == "lit":
+        return node.get("value")
+    if node_type == "col":
+        return _resolve_sql_column(node.get("name", ""), row, col_map)
+    if node_type == "binop":
+        op = node.get("op")
+        left = _eval_expr_sql(node.get("left"), row, col_map)
+        right = _eval_expr_sql(node.get("right"), row, col_map)
+        if op in {"+", "-", "*", "/"}:
+            if left is None or right is None:
+                return None
+            if op == "+":
+                return left + right
+            if op == "-":
+                return left - right
+            if op == "*":
+                return left * right
+            if op == "/":
+                return left / right
+        if op in {"=", "!=", "<", "<=", ">", ">="}:
+            if left is None or right is None:
+                return False
+            if op == "=":
+                return left == right
+            if op == "!=":
+                return left != right
+            if op == "<":
+                return left < right
+            if op == "<=":
+                return left <= right
+            if op == ">":
+                return left > right
+            if op == ">=":
+                return left >= right
+        raise RuntimeFailure(
+            "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+            f"Unsupported SQL binary operator '{op}'",
+        )
+    if node_type == "boolop":
+        op = node.get("op")
+        args = node.get("args") or []
+        if op == "and":
+            return all(bool(_eval_expr_sql(a, row, col_map)) for a in args)
+        if op == "or":
+            return any(bool(_eval_expr_sql(a, row, col_map)) for a in args)
+        raise RuntimeFailure(
+            "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+            f"Unsupported SQL boolean operator '{op}'",
+        )
+    if node_type == "unop":
+        op = node.get("op")
+        arg = _eval_expr_sql(node.get("arg"), row, col_map)
+        if op == "not":
+            return not bool(arg)
+        if op == "+":
+            return +arg if arg is not None else None
+        if op == "-":
+            return -arg if arg is not None else None
+        raise RuntimeFailure(
+            "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+            f"Unsupported SQL unary operator '{op}'",
+        )
+    raise RuntimeFailure(
+        "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+        f"Unsupported SQL expression node type '{node_type}'",
+    )
+
+
 def _compute_by_flags(by_vars: list[str], prev_key: Optional[tuple[Any, ...]], curr_key: tuple[Any, ...], next_key: Optional[tuple[Any, ...]]) -> dict[str, bool]:
     flags: dict[str, bool] = {}
     for idx, var in enumerate(by_vars):
@@ -557,6 +651,165 @@ def _execute_transpose(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
     return normalized_rows
 
 
+def _execute_sql_select(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    params = step.params or {}
+    base = params.get("from") or {}
+    joins = params.get("joins") or []
+    select_items = params.get("select") or []
+    where_expr = params.get("where")
+    group_by = params.get("group_by") or []
+
+    base_table = base.get("table")
+    base_alias = base.get("alias")
+    if not base_table or not base_alias:
+        raise RuntimeFailure(
+            "SANS_RUNTIME_SQL_MALFORMED",
+            "PROC SQL missing FROM table.",
+            _loc_to_dict(step.loc),
+        )
+    if base_table not in tables:
+        raise RuntimeFailure(
+            "SANS_RUNTIME_TABLE_UNDEFINED",
+            f"Input table '{base_table}' not bound at runtime.",
+            _loc_to_dict(step.loc),
+        )
+
+    def qualify_rows(rows: List[Dict[str, Any]], alias: str) -> List[Dict[str, Any]]:
+        qualified: List[Dict[str, Any]] = []
+        for row in rows:
+            new_row: Dict[str, Any] = {}
+            for key, value in row.items():
+                new_row[f"{alias}.{key.lower()}"] = value
+            qualified.append(new_row)
+        return qualified
+
+    def columns_for(alias: str, rows: List[Dict[str, Any]]) -> list[str]:
+        if not rows:
+            return []
+        return [f"{alias}.{col.lower()}" for col in rows[0].keys()]
+
+    current_rows = qualify_rows(tables[base_table], base_alias)
+    col_map: Dict[str, list[str]] = {}
+    base_cols = columns_for(base_alias, tables[base_table])
+    for col in base_cols:
+        short = col.split(".", 1)[1]
+        col_map.setdefault(short, []).append(col)
+
+    for join in joins:
+        join_type = join.get("type")
+        right_table = join.get("table")
+        right_alias = join.get("alias")
+        on_expr = join.get("on")
+
+        if right_table not in tables:
+            raise RuntimeFailure(
+                "SANS_RUNTIME_TABLE_UNDEFINED",
+                f"Input table '{right_table}' not bound at runtime.",
+                _loc_to_dict(step.loc),
+            )
+        right_rows = tables[right_table]
+        qualified_right = qualify_rows(right_rows, right_alias)
+        right_cols = columns_for(right_alias, right_rows)
+        for col in right_cols:
+            short = col.split(".", 1)[1]
+            col_map.setdefault(short, []).append(col)
+
+        # SQL join semantics: evaluate joins left-to-right; LEFT keeps all left rows
+        # and fills unmatched right columns with nulls.
+        joined: List[Dict[str, Any]] = []
+        for left_row in current_rows:
+            matched = False
+            for right_row in qualified_right:
+                combined = dict(left_row)
+                combined.update(right_row)
+                if bool(_eval_expr_sql(on_expr, combined, col_map)):
+                    matched = True
+                    joined.append(combined)
+            if not matched and join_type == "left":
+                combined = dict(left_row)
+                for col in right_cols:
+                    combined[col] = None
+                joined.append(combined)
+        current_rows = joined
+
+    if where_expr is not None:
+        filtered: List[Dict[str, Any]] = []
+        for row in current_rows:
+            if bool(_eval_expr_sql(where_expr, row, col_map)):
+                filtered.append(row)
+        current_rows = filtered
+
+    agg_items = [item for item in select_items if item.get("type") == "agg"]
+    non_agg_items = [item for item in select_items if item.get("type") == "col"]
+
+    if group_by or agg_items:
+        # GROUP BY semantics: form groups on key values and emit rows sorted by keys
+        # for deterministic output ordering; aggregates ignore nulls.
+        group_keys = [key.lower() for key in group_by]
+        groups: Dict[tuple[Any, ...], List[Dict[str, Any]]] = {}
+        for row in current_rows:
+            key = tuple(_resolve_sql_column(k, row, col_map) for k in group_keys) if group_keys else ("__all__",)
+            groups.setdefault(key, []).append(row)
+
+        def group_sort_key(key: tuple[Any, ...]):
+            if not group_keys:
+                return (0,)
+            return tuple(_sort_key_value(v) for v in key)
+
+        output_rows: List[Dict[str, Any]] = []
+        for key in sorted(groups.keys(), key=group_sort_key):
+            rows = groups[key]
+            out_row: Dict[str, Any] = {}
+            for item in select_items:
+                if item["type"] == "col":
+                    value = _resolve_sql_column(item["name"], rows[0], col_map)
+                    out_row[item["alias"]] = value
+                else:
+                    func = item["func"]
+                    arg = item["arg"]
+                    values: list[Any] = []
+                    if arg == "*":
+                        values = rows
+                    else:
+                        for row in rows:
+                            values.append(_resolve_sql_column(arg, row, col_map))
+                    if func == "count":
+                        if arg == "*":
+                            out_row[item["alias"]] = len(values)
+                        else:
+                            out_row[item["alias"]] = sum(1 for v in values if v is not None)
+                    elif func == "sum":
+                        nums = [v for v in values if v is not None]
+                        out_row[item["alias"]] = sum(nums) if nums else None
+                    elif func == "min":
+                        nums = [v for v in values if v is not None]
+                        out_row[item["alias"]] = min(nums) if nums else None
+                    elif func == "max":
+                        nums = [v for v in values if v is not None]
+                        out_row[item["alias"]] = max(nums) if nums else None
+                    elif func == "avg":
+                        nums = [v for v in values if v is not None]
+                        out_row[item["alias"]] = (sum(nums) / len(nums)) if nums else None
+            output_rows.append(out_row)
+
+        return output_rows
+
+    output_rows = []
+    for row in current_rows:
+        out_row: Dict[str, Any] = {}
+        for item in select_items:
+            if item["type"] == "col":
+                out_row[item["alias"]] = _resolve_sql_column(item["name"], row, col_map)
+            else:
+                raise RuntimeFailure(
+                    "SANS_RUNTIME_SQL_MALFORMED",
+                    "Aggregate select requires GROUP BY.",
+                    _loc_to_dict(step.loc),
+                )
+        output_rows.append(out_row)
+    return output_rows
+
+
 def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
@@ -588,7 +841,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                 )
 
             op = step.op
-            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose"}:
+            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose", "sql_select"}:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
                     f"Unsupported operation '{op}'",
@@ -655,6 +908,8 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                 output_rows = _execute_data_step(step, tables)
             elif op == "transpose":
                 output_rows = _execute_transpose(step, tables)
+            elif op == "sql_select":
+                output_rows = _execute_sql_select(step, tables)
             else:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
@@ -665,17 +920,28 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
             for output in step.outputs:
                 tables[output] = output_rows
 
-        # Determine terminal outputs (not consumed by any later step)
-        produced = set()
-        consumed = set()
+        # Determine outputs to emit: all terminal tables plus explicit non-terminal tables
+        # (skip compiler temp tables marked by "__" in their names).
+        produced_order: List[str] = []
+        consumed: set[str] = set()
         for step in ir_doc.steps:
             if isinstance(step, OpStep):
-                produced.update(step.outputs)
+                produced_order.extend(step.outputs)
                 consumed.update(step.inputs)
-        terminal_tables = [t for t in produced if t not in consumed]
+
+        terminal_tables = [t for t in produced_order if t not in consumed]
+        non_terminal_tables = [t for t in produced_order if t in consumed]
+
+        def is_temp_table(name: str) -> bool:
+            return "__" in name
+
+        emit_tables: List[str] = []
+        for name in terminal_tables + [t for t in non_terminal_tables if not is_temp_table(t)]:
+            if name not in emit_tables:
+                emit_tables.append(name)
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        for table_name in terminal_tables:
+        for table_name in emit_tables:
             out_path = out_dir / f"{table_name}.csv"
             table_rows = tables.get(table_name, [])
             _write_csv(out_path, table_rows)

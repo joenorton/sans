@@ -153,6 +153,13 @@ class IRDoc:
                             )
                     output_sorted_by = list(by_vars)
 
+                elif step.op == "sql_select":
+                    group_by = step.params.get("group_by") or []
+                    if group_by:
+                        output_sorted_by = list(group_by)
+                    else:
+                        output_sorted_by = None
+
                 elif step.op == "select":
                     # select preserves sortedness if sort keys are not dropped
                     if input_sorted_by is None:
