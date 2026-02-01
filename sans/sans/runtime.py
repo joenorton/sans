@@ -10,6 +10,7 @@ from time import perf_counter
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
 from .compiler import emit_check_artifacts
 from .hash_utils import compute_artifact_hash, compute_raw_hash
+from .sans_script.canon import compute_step_id, compute_transform_id
 from .xpt import load_xpt_with_warnings, dump_xpt, XptError
 from . import __version__ as _engine_version
 import json
@@ -1116,8 +1117,11 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                     for out_table, out_rows in step_outputs.items():
                         tables[out_table] = out_rows
                     
+                    t_id = compute_transform_id(op, step.params)
                     step_evidence.append({
                         "step_index": step_idx,
+                        "step_id": compute_step_id(t_id, step.inputs, step.outputs),
+                        "transform_id": t_id,
                         "op": op,
                         "inputs": list(step.inputs),
                         "outputs": list(step.outputs),
@@ -1161,8 +1165,11 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
             for output in step.outputs:
                 tables[output] = output_rows
             
+            t_id = compute_transform_id(op, step.params)
             step_evidence.append({
                 "step_index": step_idx,
+                "step_id": compute_step_id(t_id, step.inputs, step.outputs),
+                "transform_id": t_id,
                 "op": op,
                 "inputs": list(step.inputs),
                 "outputs": list(step.outputs),
@@ -1268,10 +1275,11 @@ def run_script(
     existing_inputs = {i["path"] for i in report.get("inputs", [])}
     if bindings:
         for name, path_str in bindings.items():
-            if path_str not in existing_inputs:
-                p = Path(path_str)
+            p = Path(path_str)
+            posix_path = p.as_posix()
+            if posix_path not in existing_inputs:
                 h = compute_artifact_hash(p)
-                report["inputs"].append({"path": path_str, "sha256": h, "table": name})
+                report["inputs"].append({"path": posix_path, "sha256": h, "table": name})
 
     result = execute_plan(irdoc, bindings, Path(out_dir), output_format=output_format)
 
@@ -1313,46 +1321,48 @@ def run_script(
     runtime_out_entries = []
     for out in result.outputs:
         path = Path(out["path"])
-        entry = {"path": str(path), "sha256": compute_artifact_hash(path)}
+        entry = {"path": path.as_posix(), "sha256": compute_artifact_hash(path)}
         report["outputs"].append(entry)
         runtime_out_entries.append({
-            "table": out["table"],
-            "path": str(path),
+            "name": out["table"],
+            "path": path.as_posix(),
+            "format": path.suffix.lstrip(".").lower() or "csv",
             "bytes_sha256": compute_raw_hash(path),
             "canonical_sha256": entry["sha256"],
-            "rows": out["rows"],
+            "row_count": out["rows"],
             "columns": out["columns"]
         })
 
     # 1. Emit registry.candidate.json
-    from .sans_script.canon import canonical_step_payload, compute_step_id
     registry = {
-        "registry_version": "v0.1",
+        "registry_version": "0.1",
         "transforms": [],
         "index": {}
     }
     seen_transforms = {}
     for step_idx, step in enumerate(irdoc.steps):
         if isinstance(step, OpStep):
-            t_id = compute_step_id(step)
+            t_id = compute_transform_id(step.op, step.params)
             if t_id not in seen_transforms:
-                payload = canonical_step_payload(step)
                 transform_entry = {
                     "transform_id": t_id,
                     "kind": step.op,
-                    "spec": payload["params"],
-                    "io_signature": {
-                        "inputs": payload["inputs"],
-                        "outputs": payload["outputs"]
+                    "spec": {
+                        "op": step.op,
+                        "params": step.params # _canonicalize will be done by compute_transform_id internally for hashing, but for registry we should probably store it canonicalized
                     }
                 }
+                # Actually, let's use the same payload as hashed
+                from .sans_script.canon import _canonicalize
+                transform_entry["spec"]["params"] = _canonicalize(step.params or {})
+                
                 registry["transforms"].append(transform_entry)
                 seen_transforms[t_id] = True
             registry["index"][str(step_idx)] = t_id
 
     registry_path = Path(out_dir) / "registry.candidate.json"
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-    report["outputs"].append({"path": str(registry_path), "sha256": compute_artifact_hash(registry_path)})
+    report["outputs"].append({"path": registry_path.as_posix(), "sha256": compute_artifact_hash(registry_path)})
 
     # 2. Emit runtime.evidence.json
     evidence = {
@@ -1363,7 +1373,7 @@ def run_script(
             "path": "plan.ir.json",
             "sha256": compute_raw_hash(Path(out_dir) / "plan.ir.json")
         },
-        "bindings": bindings,
+        "bindings": {name: Path(p).as_posix() for name, p in bindings.items()},
         "inputs": [],
         "outputs": runtime_out_entries,
         "step_evidence": result.step_evidence or []
@@ -1373,7 +1383,7 @@ def run_script(
         p = Path(inp["path"])
         evidence["inputs"].append({
             "name": inp.get("table"),
-            "path": inp["path"],
+            "path": p.as_posix(),
             "format": p.suffix.lstrip(".").lower() or "csv",
             "bytes_sha256": compute_raw_hash(p),
             "canonical_sha256": inp.get("sha256")

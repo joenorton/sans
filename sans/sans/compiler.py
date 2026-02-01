@@ -22,13 +22,14 @@ from . import __version__ as _engine_version
 
 from .hash_utils import compute_artifact_hash, _sha256_text
 from .sans_script import SansScriptError, lower_script, parse_sans_script
-from .sans_script.canon import compute_step_id
+from .sans_script.canon import compute_step_id, compute_transform_id
 
 def _loc_to_dict(loc) -> Dict[str, Any]:
-    return {"file": loc.file, "line_start": loc.line_start, "line_end": loc.line_end}
+    return {"file": Path(loc.file).as_posix(), "line_start": loc.line_start, "line_end": loc.line_end}
 
 def _step_to_dict(step: Step) -> Dict[str, Any]:
     if isinstance(step, OpStep):
+        t_id = compute_transform_id(step.op, step.params)
         return {
             "kind": "op",
             "loc": _loc_to_dict(step.loc),
@@ -36,7 +37,8 @@ def _step_to_dict(step: Step) -> Dict[str, Any]:
             "inputs": list(step.inputs),
             "outputs": list(step.outputs),
             "params": step.params,
-            "step_id": compute_step_id(step),
+            "transform_id": t_id,
+            "step_id": compute_step_id(t_id, step.inputs, step.outputs),
         }
     if isinstance(step, UnknownBlockStep):
         return {
@@ -403,13 +405,13 @@ def emit_check_artifacts(
         "primary_error": primary_error,
         "diagnostics": diagnostics,
         "inputs": [
-            {"path": file_name, "sha256": _sha256_text(text)}
+            {"path": Path(file_name).as_posix(), "sha256": _sha256_text(text)}
         ],
         "outputs": [
-            {"path": str(plan_path), "sha256": compute_artifact_hash(plan_path)},
-            {"path": str(report_path), "sha256": None},
+            {"path": plan_path.as_posix(), "sha256": compute_artifact_hash(plan_path)},
+            {"path": report_path.as_posix(), "sha256": None},
         ],
-        "plan_path": str(plan_path),
+        "plan_path": plan_path.as_posix(),
         "engine": {"name": "sans", "version": _engine_version},
         "settings": {
             "strict": strict,

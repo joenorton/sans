@@ -226,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             loc_str = f"{loc.get('file')}:{loc.get('line_start')}" if loc else ""
             print(f"refused: {primary.get('code')} at {loc_str}".rstrip())
         else:
-            print("ok: wrote plan.ir.json report.json")
+            print("ok: wrote plan.ir.json report.json registry.candidate.json runtime.evidence.json")
         return int(report.get("exit_code_bucket", 50))
 
     if args.command == "run":
@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             loc_str = f"{loc.get('file')}:{loc.get('line_start')}" if loc else ""
             print(f"failed: {primary.get('code')} at {loc_str}".rstrip())
         else:
-            print("ok: wrote plan.ir.json report.json")
+            print("ok: wrote plan.ir.json report.json registry.candidate.json runtime.evidence.json")
         return int(report.get("exit_code_bucket", 50))
 
     if args.command == "validate":
