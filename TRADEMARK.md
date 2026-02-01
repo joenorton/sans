@@ -1,8 +1,8 @@
-Trademark Policy
-Last Updated: February 1, 2026
+Trademark Policy. 
+Last Updated: February 1, 2026. 
 0. Disclaimer Regarding SAS Institute Inc.
-SAS® is a registered trademark of SAS Institute Inc., Cary, NC, USA.
-The sans project is an independent, open-source compiler and runtime. It is not affiliated with, endorsed by, sponsored by, or supported by SAS Institute Inc. Any reference to "SAS," "SAS-like," or the SAS language within this repository is for descriptive and compatibility purposes only (nominative fair use).
+SAS® is a registered trademark of SAS Institute Inc., Cary, NC, USA.  
+The sans project is an independent, open-source compiler and runtime. It is not affiliated with, endorsed by, sponsored by, or supported by SAS Institute Inc. Any reference to "SAS," "SAS-like," or the SAS language within this repository is for descriptive and compatibility purposes only (nominative fair use).  
 1. Purpose
 This policy describes the conditions under which you may use the name "sans" and associated logos (collectively, the "Marks") in connection with this project.
 While the software is available under the Apache 2.0 License, that license governs the copyright of the code, not the trademark (the project's identity). This policy ensures that users are not confused about the origin of the software they are using.
