@@ -16,7 +16,7 @@
   ],
   "properties": {
     "status": {"enum": ["ok", "ok_warnings", "refused", "failed"]},
-    "exit_code_bucket": {"enum": [0, 10, 20, 30, 31, 32, 40, 50]},
+    "exit_code_bucket": {"enum": [0, 10, 20, 30, 31, 32, 50]},
     "primary_error": {
       "anyOf": [
         {"type": "null"},

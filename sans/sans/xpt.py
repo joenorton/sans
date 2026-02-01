@@ -3,6 +3,7 @@ import math
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Union, Tuple
 from pathlib import Path
+from decimal import Decimal
 
 # --- Constants ---
 BLOCK_SIZE = 80
@@ -43,9 +44,16 @@ def _ibm_to_ieee(ibm_bytes: bytes) -> Optional[float]:
     mantissa = mantissa_int / 72057594037927936.0 # 2^56
     return ((-1.0)**sign) * mantissa * (16.0 ** exponent)
 
-def _ieee_to_ibm(val: Optional[Union[float, int]]) -> bytes:
-    if val is None or (isinstance(val, float) and math.isnan(val)):
+def _ieee_to_ibm(val: Optional[Union[float, int, Decimal]]) -> bytes:
+    if val is None:
         return b'\x2E\x00\x00\x00\x00\x00\x00\x00'
+    
+    if isinstance(val, (float, Decimal)) and math.isnan(val):
+        return b'\x2E\x00\x00\x00\x00\x00\x00\x00'
+    
+    if isinstance(val, Decimal):
+        val = float(val)
+        
     if val == 0.0:
         return b'\x00' * 8
     sign = 0
@@ -231,7 +239,7 @@ class XptWriter:
                 if isinstance(val, str):
                     saw_str = True
                     max_len = max(max_len, len(val))
-                elif isinstance(val, (int, float)):
+                elif isinstance(val, (int, float, Decimal)):
                     max_len = max(max_len, len(str(val)))
                 else:
                     saw_str = True

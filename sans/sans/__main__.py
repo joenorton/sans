@@ -64,6 +64,7 @@ def _write_failed_validation_report(out_dir: Path, message: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sans", description="SANS compiler/checker")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_engine_version}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     check_parser = subparsers.add_parser("check", help="Compile and validate a script")
@@ -129,9 +130,17 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
                 
         # Check outputs
+        plan_verified = False
+        reported_plan_path = report.get("plan_path")
         for out in report.get("outputs", []):
             path_str = out.get("path")
             path = Path(path_str)
+            
+            if reported_plan_path and path_str == reported_plan_path:
+                if not path.exists():
+                    print(f"failed: plan file missing at {path}")
+                    return 1
+                plan_verified = True
             expected = out.get("sha256")
             if expected is None:
                 continue
@@ -231,7 +240,10 @@ def main(argv: list[str] | None = None) -> int:
                 if "=" not in item:
                     return _write_failed_report(out_dir, f"Invalid table binding '{item}'")
                 name, path = item.split("=", 1)
-                bindings[name.strip()] = path.strip()
+                name = name.strip()
+                if name in bindings:
+                    return _write_failed_report(out_dir, f"Duplicate table binding for '{name}'")
+                bindings[name] = path.strip()
         try:
             text = script_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -278,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
                 if "=" not in item:
                     return _write_failed_validation_report(out_dir, f"Invalid table binding '{item}'")
                 name, path = item.split("=", 1)
-                bindings[name.strip()] = path.strip()
+                name = name.strip()
+                if name in bindings:
+                    return _write_failed_validation_report(out_dir, f"Duplicate table binding for '{name}'")
+                bindings[name] = path.strip()
 
         report = validate_sdtm(bindings, out_dir)
         if report.get("status") == "failed":

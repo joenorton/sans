@@ -1,116 +1,93 @@
 # sans
 
-Small, deterministic compiler **and executor** for a strict SAS‑like batch subset. It emits a plan and report, executes the supported subset, and refuses anything outside scope with stable error codes + file/line.
+**Small, deterministic compiler and executor for a strict SAS‑like batch subset.**
 
-Current stance on execution:
-- **Strict by default**: unknown means no; unsupported constructs refuse the entire block.
-- **Deterministic**: stable row/column order and reproducible artifacts.
-- **Bounded**: no macro engine, no networking, no dynamic codegen.
+`sans` compiles SAS‑like scripts into a machine-readable IR (`plan.ir.json`), executes them against tabular data, and emits a detailed execution report (`report.json`). It is built for auditability, reproducibility, and strict safety.
 
-## Quickstart (prioritized)
-1) Install
-```
-python -m pip install -e .
-```
+- **Strict by Default**: Unsupported constructs refuse the entire script with stable error codes.
+- **Deterministic**: Bit‑identical outputs (CSV/XPT) across Windows and Linux.
+- **Audit‑Ready**: Every run generates a signed manifest (SHA‑256) of all inputs and outputs.
+- **Portable**: No SAS installation required; zero‑dependency runtime (except `pydantic` for schema).
 
-2) Compile + validate (check only)
-```
-python -m sans check path\to\script.sas --out out --tables in --strict
-```
-Emits:
-- `out/plan.ir.json`
-- `out/report.json`
-- `out/preprocessed.sas` (macro‑lite expansion)
+---
 
-3) Compile the native `.sans` script
-```
-cd demo
-python -m sans check sans_script/demo.sans --out out_sans --tables in
-```
-Emits:
-- `demo/out_sans/plan.ir.json`
-- `demo/out_sans/report.json`
+## Installation
 
-4) Execute a richer demo
+```bash
+pip install -e .
 ```
-cd demo
-./demo.sh        # or powershell ./demo.ps1
-```
-Emits (inside `demo/out`):
-- `plan.ir.json`
-- `report.json`
-- `final.csv`
+This installs the `sans` CLI command. You can also use `python -m sans`.
+
+---
+
+## Quickstart
+
+### 1. Compile and Check
+Verify a script without executing it. Emits the execution plan and a refusal/ok report.
+```bash
+sans check path/to/script.sas --out out_dir --tables in_table
 ```
 
-5) Optional: execute to XPT
+### 2. Execute
+Compile, validate, and run the script. Emits output tables (CSV/XPT) and the final report.
+```bash
+sans run path/to/script.sas --out out_dir --tables source=data.csv --format csv
 ```
-cd demo
-python -m sans run hello.sas --out out --tables in=in.csv --format xpt
-```
-Emits:
-- `demo/out/out.xpt`
 
-6) Validate (SDTM)
+### 3. Verify Reproducibility
+Verify that a previously generated report matches the current state of files on disk.
+```bash
+sans verify out_dir/report.json
 ```
-python -m sans validate --profile sdtm --out out --tables dm=dm.csv,ae=ae.csv,lb=lb.csv
-```
-Emits:
-- `out/validation.report.json`
 
-7) Verify reproducibility
-```
-python -m sans verify out
-```
+---
 
 ## Native `.sans` DSL
 
-- First write a `.sans` script with `format`, `data`, `sort`, `summary`, and `select` statements, then run `python -m sans check` to produce the same `plan.ir.json` + `report.json` bundle as SAS.
-- Each statement carries a deterministic `step_id` and reuses the same expression AST/validation logic as the SAS compiler, which means the DSL can be used interchangeably in downstream tooling.
-- Try it out with `demo/sans_script/demo.sans` (compiled as part of the quickstart above) to see the native DSL plan, or hook it into your own pipeline to emit canonical plans without touching SAS.
-- The DSL uses `from ... do ... end` blocks for input modifiers, `filter(...)` for row filtering, `==` for equality, `->` for mappings, and `=` for assignments. Overwrite requires `derive!`.
-- Grammar reference: `sans/sans/sans_script/docs/grammar.md`
+`sans` includes a native, modern DSL for data pipelines that compiles to the same deterministic IR. Use it to avoid SAS syntax quirks while maintaining full audit parity.
 
-## XPT parity
-- `sans run --format xpt` now uses deterministic padding/length inference (cap 200), trims trailing spaces on read and pads on write, emits `ok_warnings` when ignoring labels/formats, and hashes bytes via `sans verify`. See `docs/SUBSET_SPEC.md` for canonicalization rules.
-
-## Supported subset (current)
-- DATA step: `set`/`merge` with assignments, `if`, `keep/drop/rename`, BY‑group flags, retain, dataset options (`keep/drop/rename/where`, `in=` on merge)
-- Macro‑lite: `%let`, `%include`, `&VAR`, single‑line `%if/%then/%else` (no `%do/%end`, no `%macro`)
-- `proc sort` (including `nodupkey`, last wins)
-- `proc transpose` (by/id/var)
-- `proc sql` subset (create table as select with inner/left joins, where, group by, aggregates)
-- `proc format` (VALUE mappings + `put()` for lookups)
-- `proc summary` (NWAY class means with `output out=... mean= / autoname`)
-- `validate --profile sdtm` (DM/AE/LB rulepack)
-- `.sans` DSL: format/data/sort/summary/select statements that compile into the deterministic `plan.ir.json` plan.
-
-## Minimal example
+```sans
+# example.sans
+data target {
+  from source do
+    x = a + 1
+    filter(x > 10)
+    derive! y = x * 2
+  end
+}
 ```
-data out;
-  set in;
-  x = a + 1;
-  if x > 3;
-run;
-```
+Compile with: `sans check example.sans --out out`
 
-## Notes
-- `%include` is restricted to the script directory + `--include-root` entries. Absolute paths require `--allow-absolute-include`.
+---
 
-## Known limits
-- Macro control flow is single‑line only (`%if/%then/%else`); `%do/%end` and `%macro` are unsupported.
-- No PROC SQL beyond the documented subset (no subqueries, unions, or window functions).
-- No networking, no external systems, no dynamic code generation.
-- XPT support is minimal but deterministic; not a full SAS transport implementation.
+## Supported SAS Subset
 
-## Why strict?
-- Prevents semantic creep and “mostly works” behavior.
-- Keeps outputs deterministic and reviewable.
-- Makes refusals explicit so you can decide how to extend the subset safely.
+- **DATA Step**: `set`, `merge` (with `in=`), `by` (first./last.), `retain`, `if/then/else`, `keep/drop/rename`.
+- **Dataset Options**: `(keep= drop= rename= where=)`.
+- **Procs**: 
+  - `proc sort` (`nodupkey`)
+  - `proc transpose` (`by`, `id`, `var`)
+  - `proc sql` (Inner/Left joins, `where`, `group by`, aggregates)
+  - `proc format` (Value mappings + `put()` lookups)
+  - `proc summary` (Class means with `autoname`)
+- **Macro‑lite**: `%let`, `%include`, `&var`, single‑line `%if/%then/%else`.
 
-## Deep references
-- Subset spec: `docs/SUBSET_SPEC.md`
-- Report schema: `docs/REPORT_CONTRACT.md`
-- Error codes: `docs/ERROR_CODES.md`
-- Architecture: `docs/ARCHITECTURE.md`
-- Roadmap / sprints: `docs/sprints/README.md`
-- Vision / pathway: `docs/BIG_PIC.md`, `docs/PATHWAY.md`
+---
+
+## Determinism & Runtime Semantics
+
+`sans` guarantees stability through strict runtime rules:
+- **Missing Values**: Nulls sort *before* all data and satisfy `null < [value]`.
+- **Numeric Precision**: Uses `Decimal` to prevent float precision loss.
+- **I/O Normalization**: Enforces LF (`\n`) and deterministic CSV quoting.
+- **Stable Hashes**: Artifact hashes are invariant across OS platforms.
+
+See [DETERMINISM.md](./DETERMINISM.md) for the sacred v1 invariants.
+
+---
+
+## Deep References 
+
+- **Specs**: [SUBSET_SPEC.md](./docs/SUBSET_SPEC.md) | [REPORT_CONTRACT.md](./docs/REPORT_CONTRACT.md)
+- **Internals**: [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | [IR_SPEC.md](./docs/IR_SPEC.md)
+- **Guidance**: [ERROR_CODES.md](./docs/ERROR_CODES.md) | [BIG_PIC.md](./docs/BIG_PIC.md)

@@ -9,7 +9,7 @@ When it is written
 
 Top-level fields
 - `status`: one of `ok`, `ok_warnings`, `refused`, `failed`.
-- `exit_code_bucket`: one of `0`, `10`, `20`, `30`, `31`, `32`, `40`, `50`.
+- `exit_code_bucket`: one of `0`, `10`, `20`, `30`, `31`, `32`, `50`.
 - `primary_error`: `{code, message, loc}` or `null`.
 - `diagnostics[]`: list of `{code, message, loc}` entries.
 - `inputs[]`: list of `{path, sha256?}`.

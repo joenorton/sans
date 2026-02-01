@@ -12,6 +12,7 @@ from .compiler import emit_check_artifacts
 from .hash_utils import compute_artifact_hash
 from .xpt import load_xpt_with_warnings, dump_xpt, XptError
 import json
+from decimal import Decimal, InvalidOperation
 
 
 @dataclass
@@ -46,22 +47,44 @@ def _loc_to_dict(loc) -> Dict[str, Any]:
 def _parse_value(raw: str) -> Any:
     if raw == "":
         return None
+    # Preserve leading zeros as strings (often codes, ZIPs, etc.)
     if raw.isdigit() and len(raw) > 1 and raw.startswith("0"):
         return raw
     try:
-        return int(raw)
-    except ValueError:
-        pass
-    try:
-        return float(raw)
-    except ValueError:
+        # Try as int first for speed/exactness
+        if raw.isdigit() or (raw.startswith("-") and raw[1:].isdigit()):
+            return int(raw)
+        # Otherwise use Decimal for floating point
+        return Decimal(raw)
+    except (ValueError, InvalidOperation):
         return raw
+
+
+def _compare_sas(left: Any, right: Any, op: str) -> bool:
+    """Implements SAS-style comparison where None (missing) is smallest."""
+    if op == "=": return left == right
+    if op == "!=": return left != right
+    
+    # Missing value logic for <, <=, >, >=
+    # If both are None, they are equal (not strictly less/greater)
+    if left is None and right is None:
+        return op in {"<=", ">="}
+    if left is None: # None is smaller than anything
+        return op in {"<", "<="}
+    if right is None: # Anything is larger than None
+        return op in {">", ">="}
+    
+    if op == "<": return left < right
+    if op == "<=": return left <= right
+    if op == ">": return left > right
+    if op == ">=": return left >= right
+    return False
 
 
 def _sort_key_value(value: Any) -> tuple[int, Any]:
     if value is None:
-        return (1, None)
-    return (0, value)
+        return (0, None)
+    return (1, value)
 
 
 def _normalize_sort_by(by_spec: Any) -> list[tuple[str, bool]]:
@@ -118,9 +141,16 @@ def _load_csv(path: Path) -> List[Dict[str, Any]]:
         try:
             headers = next(reader)
         except StopIteration:
+            # File is empty, return empty list
             return []
+            
+        if not headers:
+            # File has one empty line? 
+            return []
+
         rows: List[Dict[str, Any]] = []
         for row in reader:
+            if not row: continue # Skip completely empty lines (no commas)
             row_dict: Dict[str, Any] = {}
             for i, col in enumerate(headers):
                 row_dict[col] = _parse_value(row[i]) if i < len(row) else None
@@ -136,7 +166,7 @@ def _write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
         return
     headers = list(rows[0].keys())
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, lineterminator="\n")
         writer.writerow(headers)
         for row in rows:
             writer.writerow(["" if row.get(h) is None else row.get(h) for h in headers])
@@ -287,16 +317,16 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
                 )
             if value is None:
                 return None
-            if isinstance(value, (int, float)):
+            if isinstance(value, (int, float, Decimal)):
                 return value
             try:
                 text = str(value).strip()
                 if text == "":
                     return None
                 if text.isdigit() and len(text) > 1 and text.startswith("0"):
-                    return float(text)
-                return int(text) if text.isdigit() else float(text)
-            except ValueError:
+                    return Decimal(text)
+                return int(text) if text.isdigit() else Decimal(text)
+            except (ValueError, InvalidOperation):
                 return None
     if node_type == "binop":
         op = node.get("op")
@@ -314,20 +344,7 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
             if op == "/":
                 return left / right
         if op in {"=", "!=", "<", "<=", ">", ">="}:
-            if left is None or right is None:
-                return False
-            if op == "=":
-                return left == right
-            if op == "!=":
-                return left != right
-            if op == "<":
-                return left < right
-            if op == "<=":
-                return left <= right
-            if op == ">":
-                return left > right
-            if op == ">=":
-                return left >= right
+            return _compare_sas(left, right, op)
         raise RuntimeFailure(
             "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
             f"Unsupported binary operator '{op}'",
@@ -408,20 +425,7 @@ def _eval_expr_sql(node: Dict[str, Any], row: Dict[str, Any], col_map: Dict[str,
             if op == "/":
                 return left / right
         if op in {"=", "!=", "<", "<=", ">", ">="}:
-            if left is None or right is None:
-                return False
-            if op == "=":
-                return left == right
-            if op == "!=":
-                return left != right
-            if op == "<":
-                return left < right
-            if op == "<=":
-                return left <= right
-            if op == ">":
-                return left > right
-            if op == ">=":
-                return left >= right
+            return _compare_sas(left, right, op)
         raise RuntimeFailure(
             "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
             f"Unsupported SQL binary operator '{op}'",
@@ -1060,75 +1064,84 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
 
                 input_rows = tables[input_table]
 
-            if op == "identity":
-                output_rows = [dict(r) for r in input_rows]
-            elif op == "sort":
-                output_rows = _sort_rows(input_rows, step.params.get("by"), bool(step.params.get("nodupkey")))
-            elif op == "compute":
-                assigns = step.params.get("assign") or []
-                output_rows = []
-                for row in input_rows:
-                    new_row = dict(row)
-                    for assign in assigns:
-                        col_name = assign.get("col")
-                        expr = assign.get("expr")
-                        new_row[col_name] = _eval_expr(expr, new_row, formats)
-                    output_rows.append(new_row)
-            elif op == "filter":
-                predicate = step.params.get("predicate")
-                output_rows = []
-                for row in input_rows:
-                    keep = _eval_expr(predicate, row, formats)
-                    if bool(keep):
-                        output_rows.append(dict(row))
-            elif op == "select":
-                keep = step.params.get("keep") or []
-                drop = step.params.get("drop") or []
-                output_rows = []
-                for row in input_rows:
-                    if keep:
-                        new_row = {k: row.get(k) for k in keep}
-                    else:
-                        new_row = {k: v for k, v in row.items() if k not in drop}
-                    output_rows.append(new_row)
-            elif op == "rename":
-                rename_map = step.params.get("map") or {}
-                output_rows = []
-                for row in input_rows:
-                    new_row: Dict[str, Any] = {}
-                    for key, value in row.items():
-                        new_key = rename_map.get(key, key)
-                        new_row[new_key] = value
-                    output_rows.append(new_row)
-            elif op == "data_step":
-                step_outputs = _execute_data_step(step, tables, formats)
-                # step_outputs is Dict[str, List[Dict[str, Any]]]
-                for out_table, out_rows in step_outputs.items():
-                    tables[out_table] = out_rows
-                continue # Already updated tables
-            elif op == "transpose":
-                output_rows = _execute_transpose(step, tables)
-            elif op == "sql_select":
-                output_rows = _execute_sql_select(step, tables)
-            elif op == "format":
-                name = (step.params.get("name") or "").lower()
-                if not name:
+            try:
+                if op == "identity":
+                    output_rows = [dict(r) for r in input_rows]
+                elif op == "sort":
+                    output_rows = _sort_rows(input_rows, step.params.get("by"), bool(step.params.get("nodupkey")))
+                elif op == "compute":
+                    assigns = step.params.get("assign") or []
+                    output_rows = []
+                    for row in input_rows:
+                        new_row = dict(row)
+                        for assign in assigns:
+                            col_name = assign.get("col")
+                            expr = assign.get("expr")
+                            new_row[col_name] = _eval_expr(expr, new_row, formats)
+                        output_rows.append(new_row)
+                elif op == "filter":
+                    predicate = step.params.get("predicate")
+                    output_rows = []
+                    for row in input_rows:
+                        keep = _eval_expr(predicate, row, formats)
+                        if bool(keep):
+                            output_rows.append(dict(row))
+                elif op == "select":
+                    keep = step.params.get("keep") or []
+                    drop = step.params.get("drop") or []
+                    output_rows = []
+                    for row in input_rows:
+                        if keep:
+                            new_row = {k: row.get(k) for k in keep}
+                        else:
+                            new_row = {k: v for k, v in row.items() if k not in drop}
+                        output_rows.append(new_row)
+                elif op == "rename":
+                    rename_map = step.params.get("map") or {}
+                    output_rows = []
+                    for row in input_rows:
+                        new_row: Dict[str, Any] = {}
+                        for key, value in row.items():
+                            new_key = rename_map.get(key, key)
+                            new_row[new_key] = value
+                        output_rows.append(new_row)
+                elif op == "data_step":
+                    step_outputs = _execute_data_step(step, tables, formats)
+                    # step_outputs is Dict[str, List[Dict[str, Any]]]
+                    for out_table, out_rows in step_outputs.items():
+                        tables[out_table] = out_rows
+                    continue # Already updated tables
+                elif op == "transpose":
+                    output_rows = _execute_transpose(step, tables)
+                elif op == "sql_select":
+                    output_rows = _execute_sql_select(step, tables)
+                elif op == "format":
+                    name = (step.params.get("name") or "").lower()
+                    if not name:
+                        raise RuntimeFailure(
+                            "SANS_RUNTIME_FORMAT_MALFORMED",
+                            "FORMAT step missing name.",
+                            _loc_to_dict(step.loc),
+                        )
+                    formats[name] = {
+                        "map": dict(step.params.get("map") or {}),
+                        "other": step.params.get("other"),
+                    }
+                    output_rows = []
+                elif op == "summary":
+                    output_rows = _execute_summary(step, tables)
+                else:
                     raise RuntimeFailure(
-                        "SANS_RUNTIME_FORMAT_MALFORMED",
-                        "FORMAT step missing name.",
+                        "SANS_CAP_UNSUPPORTED_OP",
+                        f"Unsupported operation '{op}'",
                         _loc_to_dict(step.loc),
                     )
-                formats[name] = {
-                    "map": dict(step.params.get("map") or {}),
-                    "other": step.params.get("other"),
-                }
-                output_rows = []
-            elif op == "summary":
-                output_rows = _execute_summary(step, tables)
-            else:
+            except RuntimeFailure:
+                raise
+            except Exception as exc:
                 raise RuntimeFailure(
-                    "SANS_CAP_UNSUPPORTED_OP",
-                    f"Unsupported operation '{op}'",
+                    "SANS_RUNTIME_INTERNAL_ERROR",
+                    f"Unexpected error during '{op}': {exc}",
                     _loc_to_dict(step.loc),
                 )
 
@@ -1248,7 +1261,7 @@ def run_script(
 
     if result.status == "failed":
         report["status"] = "failed"
-        report["exit_code_bucket"] = 40
+        report["exit_code_bucket"] = 50
         if result.diagnostics:
             primary = result.diagnostics[0]
             report["primary_error"] = {
