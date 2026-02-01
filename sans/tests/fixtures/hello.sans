@@ -1,0 +1,22 @@
+sans 1.0
+
+format $sev do
+  "MILD" -> "1"
+  "MODERATE" -> "2"
+  other -> ""
+end
+
+data lb_named do
+  from lb do
+    keep(subjid, lbdtc, lbtestcd, lbstresn)
+  end
+end
+
+sort lb_named -> lb_sorted by subjid lbdtc nodupkey true
+
+summary lb_sorted -> lb_summary do
+  class subjid
+  var lbstresn
+end
+
+select lb_summary -> lb_final keep(subjid, lbstresn_mean)

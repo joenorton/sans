@@ -1,0 +1,104 @@
+﻿import json
+from pathlib import Path
+
+from sans.compiler import _irdoc_to_dict, compile_sans_script, UnknownBlockStep
+from sans.ir import IRDoc
+
+
+FIXTURE = Path("sans/tests/fixtures/hello.sans")
+PLAN = Path("sans/tests/gold/hello.plan.ir.json")
+
+
+def _compile_script(text: str) -> dict:
+    irdoc = compile_sans_script(text, "sans/tests/fixtures/hello.sans", tables={"lb"})
+    validated = IRDoc(steps=irdoc.steps, tables=irdoc.tables, table_facts=irdoc.table_facts).validate()
+    irdoc = IRDoc(steps=irdoc.steps, tables=irdoc.tables, table_facts=validated)
+    return _irdoc_to_dict(irdoc)
+
+
+def _normalize_plan(plan: dict) -> dict:
+    for step in plan.get("steps", []):
+        loc = step.get("loc")
+        if isinstance(loc, dict) and "file" in loc:
+            loc["file"] = loc["file"].replace("\\", "/")
+    return plan
+
+
+def _assert_block_error(text: str, expected_code: str):
+    irdoc = compile_sans_script(text, "script.sans", tables={"bar"})
+    assert irdoc.steps, "Expected steps even on refusal"
+    assert isinstance(irdoc.steps[0], UnknownBlockStep)
+    assert irdoc.steps[0].code == expected_code
+
+
+def test_parse_lower_golden_hello_sans():
+    plan = _normalize_plan(_compile_script(FIXTURE.read_text(encoding="utf-8")))
+    expected = _normalize_plan(json.loads(PLAN.read_text(encoding="utf-8")))
+    assert plan == expected
+
+
+def test_sans_script_deterministic_plan():
+    first = _compile_script(FIXTURE.read_text(encoding="utf-8"))
+    second = _compile_script(FIXTURE.read_text(encoding="utf-8"))
+    assert first == second
+
+
+def test_missing_header_refused():
+    script = "data foo do\n  from bar\nend\n"
+    _assert_block_error(script, "E_MISSING_HEADER")
+
+
+def test_malformed_end_refused():
+    script = "sans 1.0\ndata foo do\n  from bar\n"
+    _assert_block_error(script, "E_PARSE")
+
+
+def test_unknown_clause_refused():
+    script = (
+        "sans 1.0\n"
+        "data foo do\n"
+        "  from bar do\n"
+        "  end\n"
+        "  mystery\n"
+        "end\n"
+    )
+    _assert_block_error(script, "E_UNKNOWN_STMT")
+
+
+def test_invalid_expression_refused():
+    script = (
+        "sans 1.0\n"
+        "data foo do\n"
+        "  from bar do\n"
+        "  end\n"
+        "  filter (a > )\n"
+        "end\n"
+    )
+    _assert_block_error(script, "E_BAD_EXPR")
+
+
+def test_case_missing_else_refused():
+    script = """\nsans 1.0\ndata foo do\n  from bar do\n  end\n  case cat\n    when \"A\"\n  end\nend\n"""
+    _assert_block_error(script, "E_PARSE")
+
+
+def test_single_equals_refused():
+    script = (
+        "sans 1.0\n"
+        "data foo do\n"
+        "  from bar do\n"
+        "  end\n"
+        "  filter a = 1\n"
+        "end\n"
+    )
+    _assert_block_error(script, "E_BAD_EXPR")
+
+
+def test_sort_missing_by_refused():
+    script = "sans 1.0\nsort bar -> baz\n"
+    _assert_block_error(script, "E_PARSE")
+
+
+def test_data_missing_set_refused():
+    script = "sans 1.0\ndata foo do\n  keep(a)\nend\n"
+    _assert_block_error(script, "E_BAD_SET")

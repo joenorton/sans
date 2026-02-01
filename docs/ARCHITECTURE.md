@@ -206,7 +206,7 @@ this makes the run reproducible and auditable. it’s also catnip for any higher
 
 hard-fail tokens/constructs (v0.1):
 
-* macro language (`%macro`, `%do`, `%if`, `%include`, etc.)
+* macro definitions and block control (`%macro`, `%do/%end`); macro-lite `%let`/`%include`/`&VAR` and simple `%if/%then/%else` are allowed under strict include policy.
 * `proc sql` forms outside the supported subset
 * `proc format` forms outside value mapping subset
 * `proc summary` forms outside the nway/mean subset

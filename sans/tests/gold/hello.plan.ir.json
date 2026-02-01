@@ -1,0 +1,167 @@
+{
+  "steps": [
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 3,
+        "line_end": 7
+      },
+      "op": "format",
+      "inputs": [],
+      "outputs": [
+        "__format__$sev"
+      ],
+      "params": {
+        "name": "$sev",
+        "map": {
+          "MILD": "1",
+          "MODERATE": "2"
+        },
+        "other": ""
+      },
+      "step_id": "b69bee5e4ea52bcb61aaf468e5ddc67b4983b51a5780951c633fe211b8903f16"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 9,
+        "line_end": 13
+      },
+      "op": "data_step",
+      "inputs": [
+        "lb"
+      ],
+      "outputs": [
+        "lb_named"
+      ],
+      "params": {
+        "mode": "set",
+        "inputs": [
+          {
+            "table": "lb",
+            "keep": [
+              "ubjid",
+              "lbdtc",
+              "lbte",
+              "tcd",
+              "lb",
+              "tre",
+              "n"
+            ]
+          }
+        ],
+        "by": [],
+        "retain": [],
+        "keep": [],
+        "drop": [],
+        "statements": [],
+        "explicit_output": false
+      },
+      "step_id": "da2a010d54e4ccc3c72adad70eb50b2511e282ea8cf82dbdf54f4a6ac76be3f2"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 15,
+        "line_end": 15
+      },
+      "op": "sort",
+      "inputs": [
+        "lb_named"
+      ],
+      "outputs": [
+        "lb_sorted"
+      ],
+      "params": {
+        "by": [
+          "subjid",
+          "lbdtc"
+        ],
+        "nodupkey": true
+      },
+      "step_id": "dd6429d1cb28f4c5855fd1cbb1539ba7ccbf95e3413b2dfce6d32b3f7e4c0d48"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 17,
+        "line_end": 20
+      },
+      "op": "summary",
+      "inputs": [
+        "lb_sorted"
+      ],
+      "outputs": [
+        "lb_summary"
+      ],
+      "params": {
+        "class": [
+          "subjid"
+        ],
+        "vars": [
+          "lbstresn"
+        ],
+        "stat": "mean",
+        "autoname": true
+      },
+      "step_id": "5793d2d181b106f3264ce2adbad41daed1a0dfa20259775a6850f02dde6b255c"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 22,
+        "line_end": 22
+      },
+      "op": "select",
+      "inputs": [
+        "lb_summary"
+      ],
+      "outputs": [
+        "lb_final"
+      ],
+      "params": {
+        "keep": [
+          "ubjid",
+          "lb",
+          "tre",
+          "n_mean"
+        ],
+        "drop": []
+      },
+      "step_id": "ee503ea704d60896d51cbbbbed21f3bc6105a690c5063bdcff6dbb746a717b0f"
+    }
+  ],
+  "tables": [
+    "lb"
+  ],
+  "table_facts": {
+    "lb": {
+      "sorted_by": null
+    },
+    "__format__$sev": {
+      "sorted_by": null
+    },
+    "lb_named": {
+      "sorted_by": null
+    },
+    "lb_sorted": {
+      "sorted_by": [
+        "subjid",
+        "lbdtc"
+      ]
+    },
+    "lb_summary": {
+      "sorted_by": [
+        "subjid"
+      ]
+    },
+    "lb_final": {
+      "sorted_by": null
+    }
+  }
+}

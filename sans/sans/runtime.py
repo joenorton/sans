@@ -9,6 +9,8 @@ from time import perf_counter
 
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
 from .compiler import emit_check_artifacts
+from .hash_utils import compute_artifact_hash
+from .xpt import load_xpt_with_warnings, dump_xpt, XptError
 import json
 
 
@@ -497,27 +499,111 @@ def _execute_data_step(
             )
 
     retained: Dict[str, Any] = {name: None for name in retain_vars}
-    outputs: List[Dict[str, Any]] = []
+    
+    # Track multiple output tables
+    target_outputs: Dict[str, List[Dict[str, Any]]] = {}
+    for out_table in step.outputs:
+        target_outputs[out_table] = []
 
-    def emit_row(row: Dict[str, Any]) -> None:
+    def emit_row(row: Dict[str, Any], target: Optional[str] = None) -> None:
         if keep_vars:
             out_row = {k: row.get(k) for k in keep_vars}
         else:
             out_row = dict(row)
-        outputs.append(out_row)
+            
+        # If target is specified, output to that table. Else to all?
+        # Standard SAS: if target specified, ONLY to that. If not, to ALL listed in DATA stmt.
+        if target:
+            if target in target_outputs:
+                target_outputs[target].append(out_row)
+        else:
+            for t in target_outputs:
+                target_outputs[t].append(out_row)
 
-    def apply_action(action: Dict[str, Any], row: Dict[str, Any]) -> None:
-        if action.get("type") == "assign":
-            row[action["target"]] = _eval_expr(action["expr"], row, formats)
-            return
-        if action.get("type") == "output":
-            emit_row(row)
-            return
-        raise RuntimeFailure(
-            "SANS_RUNTIME_UNSUPPORTED_DATASTEP",
-            f"Unsupported DATA step action '{action.get('type')}'",
-            _loc_to_dict(step.loc),
-        )
+    def execute_stmts(stmts: List[Dict[str, Any]], row: Dict[str, Any], depth: int = 0) -> bool:
+        """Returns True if execution should continue, False if row was filtered."""
+        if depth > 50:
+            raise RuntimeFailure(
+                "SANS_RUNTIME_CONTROL_DEPTH",
+                "Control-flow nesting exceeds 50 levels.",
+            )
+        for stmt in stmts:
+            stype = stmt.get("type")
+            if stype == "assign":
+                allow_overwrite = stmt.get("allow_overwrite", True)
+                target = stmt["target"]
+                if not allow_overwrite and target in row:
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_ASSIGN_OVERWRITE",
+                        f"Assignment to existing column '{target}' requires derive! in sans scripts.",
+                    )
+                row[target] = _eval_expr(stmt["expr"], row, formats)
+            elif stype == "filter":
+                if not bool(_eval_expr(stmt["predicate"], row, formats)):
+                    return False
+            elif stype == "output":
+                emit_row(row, stmt.get("target"))
+            elif stype == "if_then":
+                if bool(_eval_expr(stmt["predicate"], row, formats)):
+                    if not execute_stmts([stmt["then"]], row, depth + 1): return False
+                elif stmt.get("else"):
+                    if not execute_stmts([stmt["else"]], row, depth + 1): return False
+            elif stype == "block":
+                if not execute_stmts(stmt.get("body", []), row, depth + 1): return False
+            elif stype == "do_loop":
+                start_val = _eval_expr(stmt["start"], row, formats)
+                end_val = _eval_expr(stmt["end"], row, formats)
+                step_val = _eval_expr(stmt.get("step") or {"type": "lit", "value": 1}, row, formats)
+                if start_val is None or end_val is None:
+                    continue
+                var = stmt["var"]
+                if not isinstance(start_val, int) or not isinstance(end_val, int) or not isinstance(step_val, int):
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_LOOP_STEP_INVALID",
+                        "DO loop bounds must be integers.",
+                    )
+                if step_val == 0:
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_LOOP_STEP_INVALID",
+                        "DO loop step cannot be 0.",
+                    )
+
+                if step_val > 0:
+                    if start_val > end_val:
+                        continue
+                    iterations = ((end_val - start_val) // step_val) + 1
+                else:
+                    if start_val < end_val:
+                        continue
+                    iterations = ((start_val - end_val) // abs(step_val)) + 1
+
+                if iterations > 1000000:
+                    raise RuntimeFailure("SANS_RUNTIME_LOOP_LIMIT", "Loop exceeded 1,000,000 iterations.")
+
+                count = 0
+                val = start_val
+                while True:
+                    if (step_val > 0 and val > end_val) or (step_val < 0 and val < end_val):
+                        break
+                    count += 1
+                    row[var] = val
+                    if not execute_stmts(stmt.get("body", []), row, depth + 1): return False
+                    val += step_val
+            elif stype == "select":
+                matched = False
+                for when in stmt.get("when", []):
+                    if bool(_eval_expr(when["cond"], row, formats)):
+                        if not execute_stmts([when["action"]], row, depth + 1): return False
+                        matched = True
+                        break
+                if not matched:
+                    if stmt.get("otherwise"):
+                        if not execute_stmts([stmt["otherwise"]], row, depth + 1): return False
+                    else:
+                        # SAS select/when without otherwise is error if no match?
+                        # Actually SAS just continues? No, it's an error.
+                        raise RuntimeFailure("SANS_RUNTIME_SELECT_MISMATCH", "SELECT statement had no matching WHEN and no OTHERWISE.")
+        return True
 
     if mode == "set":
         input_rows = _apply_dataset_options(
@@ -542,34 +628,12 @@ def _execute_data_step(
                 next_key = keys[idx + 1] if idx + 1 < len(keys) else None
                 row.update(_compute_by_flags(by_vars, prev_key, curr_key, next_key))
 
-            dropped = False
-            for stmt in statements:
-                stmt_type = stmt.get("type")
-                if stmt_type == "assign":
-                    row[stmt["target"]] = _eval_expr(stmt["expr"], row, formats)
-                elif stmt_type == "filter":
-                    if not bool(_eval_expr(stmt["predicate"], row, formats)):
-                        dropped = True
-                        break
-                elif stmt_type == "output":
+            if execute_stmts(statements, row):
+                if not explicit_output:
                     emit_row(row)
-                elif stmt_type == "if_then":
-                    if bool(_eval_expr(stmt["predicate"], row, formats)):
-                        apply_action(stmt["then"], row)
-                    elif stmt.get("else") is not None:
-                        apply_action(stmt["else"], row)
-                else:
-                    raise RuntimeFailure(
-                        "SANS_RUNTIME_UNSUPPORTED_DATASTEP",
-                        f"Unsupported DATA step statement '{stmt_type}'",
-                        _loc_to_dict(step.loc),
-                    )
 
             for name in retain_vars:
                 retained[name] = row.get(name)
-
-            if not explicit_output and not dropped:
-                emit_row(row)
 
     elif mode == "merge":
         input_rows = [
@@ -650,34 +714,12 @@ def _execute_data_step(
                 if by_vars:
                     row.update(_compute_by_flags(by_vars, None if idx == 0 else key, key, None if idx == max_count - 1 else key))
 
-                dropped = False
-                for stmt in statements:
-                    stmt_type = stmt.get("type")
-                    if stmt_type == "assign":
-                        row[stmt["target"]] = _eval_expr(stmt["expr"], row, formats)
-                    elif stmt_type == "filter":
-                        if not bool(_eval_expr(stmt["predicate"], row, formats)):
-                            dropped = True
-                            break
-                    elif stmt_type == "output":
+                if execute_stmts(statements, row):
+                    if not explicit_output:
                         emit_row(row)
-                    elif stmt_type == "if_then":
-                        if bool(_eval_expr(stmt["predicate"], row, formats)):
-                            apply_action(stmt["then"], row)
-                        elif stmt.get("else") is not None:
-                            apply_action(stmt["else"], row)
-                    else:
-                        raise RuntimeFailure(
-                            "SANS_RUNTIME_UNSUPPORTED_DATASTEP",
-                            f"Unsupported DATA step statement '{stmt_type}'",
-                            _loc_to_dict(step.loc),
-                        )
 
                 for name in retain_vars:
                     retained[name] = row.get(name)
-
-                if not explicit_output and not dropped:
-                    emit_row(row)
 
     else:
         raise RuntimeFailure(
@@ -686,7 +728,15 @@ def _execute_data_step(
             _loc_to_dict(step.loc),
         )
 
-    return outputs
+    # Return first output table as default?
+    # No, we need to return all.
+    # execute_plan will handle step.outputs.
+    # I should update _execute_data_step signature to return multiple?
+    # Actually execute_plan sets tables[output] = output_rows.
+    # If I have multiple outputs, I should return a DICT or handle it in execute_plan.
+    
+    # I'll update execute_plan to handle multiple outputs from _execute_data_step.
+    return target_outputs
 
 
 def _execute_transpose(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -945,7 +995,7 @@ def _execute_summary(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> L
     return outputs
 
 
-def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> ExecutionResult:
+def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_format: str = "csv") -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
     outputs: List[Dict[str, Any]] = []
@@ -960,7 +1010,16 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                     "SANS_RUNTIME_INPUT_NOT_FOUND",
                     f"Input table '{name}' file not found: {path_str}",
                 )
-            tables[name] = _load_csv(path)
+            if path.suffix.lower() == ".xpt":
+                try:
+                    rows, warnings = load_xpt_with_warnings(path)
+                except XptError as exc:
+                    raise RuntimeFailure(exc.code, exc.message)
+                tables[name] = rows
+                for warn in warnings:
+                    diagnostics.append(RuntimeDiagnostic(code=warn.code, message=warn.message))
+            else:
+                tables[name] = _load_csv(path)
 
         for step in ir_doc.steps:
             if isinstance(step, UnknownBlockStep):
@@ -1042,7 +1101,11 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                         new_row[new_key] = value
                     output_rows.append(new_row)
             elif op == "data_step":
-                output_rows = _execute_data_step(step, tables, formats)
+                step_outputs = _execute_data_step(step, tables, formats)
+                # step_outputs is Dict[str, List[Dict[str, Any]]]
+                for out_table, out_rows in step_outputs.items():
+                    tables[out_table] = out_rows
+                continue # Already updated tables
             elif op == "transpose":
                 output_rows = _execute_transpose(step, tables)
             elif op == "sql_select":
@@ -1094,12 +1157,21 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
 
         out_dir.mkdir(parents=True, exist_ok=True)
         for table_name in emit_tables:
-            out_path = out_dir / f"{table_name}.csv"
             table_rows = tables.get(table_name, [])
-            _write_csv(out_path, table_rows)
             columns: List[str] = []
             if table_rows:
                 columns = list(table_rows[0].keys())
+
+            if output_format.lower() == "xpt":
+                out_path = out_dir / f"{table_name}.xpt"
+                try:
+                    dump_xpt(out_path, table_rows, columns, dataset_name=table_name.upper())
+                except XptError as exc:
+                    raise RuntimeFailure(exc.code, exc.message)
+            else:
+                out_path = out_dir / f"{table_name}.csv"
+                _write_csv(out_path, table_rows)
+            
             outputs.append(
                 {
                     "table": table_name,
@@ -1109,9 +1181,10 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path) -> Exec
                 }
             )
 
+        status = "ok_warnings" if diagnostics else "ok"
         return ExecutionResult(
-            status="ok",
-            diagnostics=[],
+            status=status,
+            diagnostics=diagnostics,
             outputs=outputs,
             execute_ms=int((perf_counter() - start) * 1000),
         )
@@ -1132,6 +1205,10 @@ def run_script(
     bindings: Dict[str, str],
     out_dir: Path,
     strict: bool = True,
+    output_format: str = "csv",
+    include_roots: Optional[List[Path]] = None,
+    allow_absolute_includes: bool = False,
+    allow_include_escape: bool = False,
 ) -> Dict[str, Any]:
     irdoc, report = emit_check_artifacts(
         text=text,
@@ -1139,6 +1216,9 @@ def run_script(
         tables=set(bindings.keys()) if bindings else None,
         out_dir=out_dir,
         strict=strict,
+        include_roots=include_roots,
+        allow_absolute_includes=allow_absolute_includes,
+        allow_include_escape=allow_include_escape,
     )
 
     # If compilation/validation refused, annotate runtime and exit.
@@ -1148,7 +1228,16 @@ def run_script(
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report
 
-    result = execute_plan(irdoc, bindings, Path(out_dir))
+    # Populate input hashes
+    existing_inputs = {i["path"] for i in report.get("inputs", [])}
+    if bindings:
+        for name, path_str in bindings.items():
+            if path_str not in existing_inputs:
+                p = Path(path_str)
+                h = compute_artifact_hash(p)
+                report["inputs"].append({"path": path_str, "sha256": h, "table": name})
+
+    result = execute_plan(irdoc, bindings, Path(out_dir), output_format=output_format)
 
     report["runtime"] = {
         "status": result.status,
@@ -1171,19 +1260,41 @@ def run_script(
                 {"code": d.code, "message": d.message, "loc": d.loc}
                 for d in result.diagnostics
             ]
+    elif result.status == "ok_warnings":
+        report["status"] = "ok_warnings"
+        report["exit_code_bucket"] = 10
+        report["primary_error"] = None
+        report["diagnostics"] = [
+            {"code": d.code, "message": d.message, "loc": d.loc}
+            for d in result.diagnostics
+        ]
     else:
         report["status"] = "ok"
         report["exit_code_bucket"] = 0
         report["primary_error"] = None
 
     # Extend outputs with runtime outputs and hashes if available.
-    from .compiler import _sha256_path
     for out in result.outputs:
         path = Path(out["path"])
         report["outputs"].append(
-            {"path": str(path), "sha256": _sha256_path(path)}
+            {"path": str(path), "sha256": compute_artifact_hash(path)}
         )
 
     report_path = Path(out_dir) / "report.json"
+    
+    # Update self-hash for report.json
+    # Find self entry
+    self_entry = None
+    for o in report["outputs"]:
+        if o["path"] == str(report_path):
+            self_entry = o
+            break
+    
+    if self_entry:
+        self_entry["sha256"] = None
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        new_hash = compute_artifact_hash(report_path)
+        self_entry["sha256"] = new_hash
+        
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report

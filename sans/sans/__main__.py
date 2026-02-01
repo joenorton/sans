@@ -72,25 +72,128 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument("--tables", default="", help="Comma-separated list of predeclared tables")
     check_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     check_parser.add_argument("--no-strict", dest="strict", action="store_false")
+    check_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
+    check_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
+    check_parser.add_argument("--allow-include-escape", action="store_true", default=False)
 
     run_parser = subparsers.add_parser("run", help="Compile, validate, and execute a script")
     run_parser.add_argument("script", help="Path to the script file")
     run_parser.add_argument("--out", required=True, help="Output directory for plan/report and outputs")
     run_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
+    run_parser.add_argument("--format", default="csv", choices=["csv", "xpt"], help="Output format (csv, xpt)")
     run_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     run_parser.add_argument("--no-strict", dest="strict", action="store_false")
+    run_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
+    run_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
+    run_parser.add_argument("--allow-include-escape", action="store_true", default=False)
 
     validate_parser = subparsers.add_parser("validate", help="Validate tables against a profile")
     validate_parser.add_argument("--profile", required=True, help="Validation profile (e.g., sdtm)")
     validate_parser.add_argument("--out", required=True, help="Output directory for validation report")
     validate_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
 
+    verify_parser = subparsers.add_parser("verify", help="Verify a repro bundle")
+    verify_parser.add_argument("bundle", help="Path to report.json or bundle directory")
+
     args = parser.parse_args(argv)
+
+    if args.command == "verify":
+        from .hash_utils import compute_artifact_hash, _sha256_text
+        bundle_path = Path(args.bundle)
+        if bundle_path.is_dir():
+            report_path = bundle_path / "report.json"
+        else:
+            report_path = bundle_path
+            
+        if not report_path.exists():
+            print(f"failed: report not found at {report_path}")
+            return 1
+            
+        try:
+            report_text = report_path.read_text(encoding="utf-8")
+            report = json.loads(report_text)
+        except Exception as e:
+            print(f"failed: invalid json in report: {e}")
+            return 1
+
+        # Check inputs
+        for inp in report.get("inputs", []):
+            path = Path(inp.get("path"))
+            expected = inp.get("sha256")
+            if not path.exists():
+                print(f"failed: input file missing: {path}")
+                return 1
+            actual = compute_artifact_hash(path)
+            if actual != expected:
+                print(f"failed: input hash mismatch for {path}")
+                return 1
+                
+        # Check outputs
+        for out in report.get("outputs", []):
+            path_str = out.get("path")
+            path = Path(path_str)
+            expected = out.get("sha256")
+            if expected is None:
+                continue
+
+            # Special handling for report.json self-verification
+            # We assume report.path in json matches the file we are reading
+            # Or we check if path matches report_path
+            is_report = False
+            try:
+                if path.resolve() == report_path.resolve():
+                    is_report = True
+            except OSError:
+                pass
+            
+            if is_report:
+                # To verify report.json, we must revert the self-hash to None (or whatever it was before writing)
+                # In compiler.py, it sets output[1]["sha256"] = hash. 
+                # We need to find the entry for report.json in the loaded report and set it to None, then serialize.
+                # But serialization must be exact (indent=2).
+                
+                # Deep copy report to modify
+                report_copy = json.loads(report_text) 
+                # Find the self entry
+                found = False
+                for item in report_copy.get("outputs", []):
+                    if item.get("path") == path_str:
+                        item["sha256"] = None
+                        found = True
+                        break
+                
+                if found:
+                    # Re-serialize exactly as compiler.py does
+                    # compiler.py uses json.dumps(report, indent=2)
+                    # Python's json.dumps with indent=2 adds trailing spaces? No.
+                    # separators? default is (', ', ': ')
+                    expected_bytes = json.dumps(report_copy, indent=2).encode("utf-8")
+                    actual_hash = _sha256_text(expected_bytes.decode("utf-8")) # hash_utils._sha256_text takes str
+                    
+                    # Wait, hash_utils._sha256_text encodes as utf-8 then hashes.
+                    # So passing the string is correct.
+                    
+                    if actual_hash != expected:
+                        print(f"failed: report hash mismatch")
+                        return 1
+                continue
+
+            if not path.exists():
+                print(f"failed: output file missing: {path}")
+                return 1
+            actual = compute_artifact_hash(path)
+            if actual != expected:
+                print(f"failed: output hash mismatch for {path}")
+                return 1
+                
+        print("ok: verified")
+        return 0
 
     if args.command == "check":
         script_path = Path(args.script)
         out_dir = Path(args.out)
         tables = _parse_tables(args.tables)
+        include_roots = [Path(p) for p in args.include_root] if args.include_root else None
         try:
             text = script_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -102,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
             tables=tables,
             out_dir=out_dir,
             strict=args.strict,
+            include_roots=include_roots,
+            allow_absolute_includes=args.allow_absolute_include,
+            allow_include_escape=args.allow_include_escape,
         )
 
         status = report.get("status")
@@ -131,12 +237,17 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             return _write_failed_report(out_dir, str(exc))
 
+        include_roots = [Path(p) for p in args.include_root] if args.include_root else None
         report = run_script(
             text=text,
             file_name=str(script_path),
             bindings=bindings,
             out_dir=out_dir,
             strict=args.strict,
+            output_format=args.format,
+            include_roots=include_roots,
+            allow_absolute_includes=args.allow_absolute_include,
+            allow_include_escape=args.allow_include_escape,
         )
 
         status = report.get("status")

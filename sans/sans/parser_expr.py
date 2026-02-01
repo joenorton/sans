@@ -19,7 +19,7 @@ TOKEN_PATTERNS = [
     (r"\bnull\b|\.", "NULL"), # Null literal (handle both 'null' keyword and '.' for SAS)
     (r"\b[a-zA-Z_]\w*\b", "IDENTIFIER"), # Column references / variable names
     (r"\d+(?:\.\d*)?", "NUMBER"), # Numeric literals (int or float)
-    (r"<=|>=|\^=|~=|=|<|>|\+|-|\*|\/", "OPERATOR"), # Multi-char operators first, then single-char
+    (r"==|!=|<=|>=|\^=|~=|=|<|>|\+|-|\*|\/", "OPERATOR"), # Multi-char operators first, then single-char
     (r"\(", "LPAREN"),
     (r"\)", "RPAREN"),
     (r",", "COMMA"),
@@ -70,7 +70,7 @@ PRECEDENCE = {
     'or': 1,
     'and': 2,
     'not': 3, # Unary operator
-    '=': 4, '<': 4, '>': 4, '<=': 4, '>=': 4, '^=': 4, '~=': 4,
+    '=': 4, '==': 4, '!=': 4, '<': 4, '>': 4, '<=': 4, '>=': 4, '^=': 4, '~=': 4,
     'ne': 4, 'eq': 4, 'lt': 4, 'le': 4, 'gt': 4, 'ge': 4,
     '+': 5, '-': 5,
     '*': 6, '/': 6,
@@ -187,6 +187,7 @@ class Parser:
                     "~=": "!=",
                     "ne": "!=",
                     "eq": "=",
+                    "==": "=",
                     "lt": "<",
                     "le": "<=",
                     "gt": ">",

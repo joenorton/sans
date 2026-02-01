@@ -42,8 +42,10 @@ def test_parse_binary_operators_precedence():
 
 def test_parse_comparisons():
     assert parse_expression_from_string("a = b") == binop("=", col("a"), col("b"))
+    assert parse_expression_from_string("a == b") == binop("=", col("a"), col("b"))
     assert parse_expression_from_string("a > 10") == binop(">", col("a"), lit(10))
     assert parse_expression_from_string("x ~= y") == binop("!=", col("x"), col("y"))
+    assert parse_expression_from_string("x != y") == binop("!=", col("x"), col("y"))
     assert parse_expression_from_string("a ne b") == binop("!=", col("a"), col("b"))
     assert parse_expression_from_string("a eq b") == binop("=", col("a"), col("b"))
     assert parse_expression_from_string("a lt b") == binop("<", col("a"), col("b"))

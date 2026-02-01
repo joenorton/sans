@@ -1,0 +1,26 @@
+sans 1.0
+
+format $risk do
+  "HIGH" -> "High risk"
+  "LOW" -> "Low risk"
+  other -> "Other"
+end
+
+data enriched do
+  from in do
+    rename(b -> base)
+  end
+
+  base2 = a * 2
+  filter base2 > 10
+  keep(a, base, base2)
+end
+
+sort enriched -> enriched_s by a nodupkey true
+
+summary enriched_s -> stats do
+  class a
+  var base2
+end
+
+select stats -> final keep(a, base2_mean)

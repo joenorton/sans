@@ -13,6 +13,8 @@ sans/sans.egg-info/
 
 # ouputs
 out/
+demo/out/
 
 # archive
 docs/archive/
+docs/sprints/

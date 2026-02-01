@@ -232,10 +232,9 @@ class TestDataStepCompiler:
 
     # --- Forbidden Token Checks ---
     @pytest.mark.parametrize("input_script_part, detected_token, line_num", [
-        ("do;", "do", 4), ("end;", "end", 4), ("lag(col1);", "lag", 4),
-        ("array arr[5];", "array", 4), ("call symput('a', 'b');", "call", 4),
-        ("infile 'file.txt';", "infile", 4), ("input var1 var2;", "input", 4),
-        ("proc print;", "proc", 4), ("%macro;", "%", 4)
+        ("lag(col1);", "lag", 4), ("array arr[5];", "array", 4),
+        ("call symput('a', 'b');", "call", 4), ("infile 'file.txt';", "infile", 4),
+        ("input var1 var2;", "input", 4), ("proc print;", "proc", 4), ("%macro;", "%", 4)
     ])
     def test_forbidden_token_in_data_step(self, input_script_part, detected_token, line_num):
         script = textwrap.dedent(f"""

@@ -6,6 +6,8 @@ from pathlib import Path
 from time import perf_counter
 
 from .frontend import detect_refusal, split_statements, segment_blocks, Block
+from .preprocessor import preprocess_text, MacroError
+from ._loc import Loc
 from .recognizer import (
     recognize_data_block,
     recognize_proc_sort_block,
@@ -17,6 +19,10 @@ from .recognizer import (
 from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
 from . import __version__ as _engine_version
 
+
+from .hash_utils import compute_artifact_hash, _sha256_text
+from .sans_script import SansScriptError, lower_script, parse_sans_script
+from .sans_script.canon import compute_step_id
 
 def _loc_to_dict(loc) -> Dict[str, Any]:
     return {"file": loc.file, "line_start": loc.line_start, "line_end": loc.line_end}
@@ -30,6 +36,7 @@ def _step_to_dict(step: Step) -> Dict[str, Any]:
             "inputs": list(step.inputs),
             "outputs": list(step.outputs),
             "params": step.params,
+            "step_id": compute_step_id(step),
         }
     if isinstance(step, UnknownBlockStep):
         return {
@@ -58,16 +65,6 @@ def _error_to_dict(err: UnknownBlockStep) -> Dict[str, Any]:
         "severity": err.severity,
         "loc": _loc_to_dict(err.loc),
     }
-
-def _sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-def _sha256_path(path: Path) -> Optional[str]:
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return None
-    return hashlib.sha256(data).hexdigest()
 
 def _exit_bucket_for_code(code: Optional[str]) -> int:
     if not code:
@@ -98,6 +95,9 @@ def compile_script(
     file_name: str = "<string>",
     tables: Optional[Set[str]] = None,
     initial_table_facts: Optional[Dict[str, Dict[str, Any]]] = None,
+    include_roots: Optional[List[Path]] = None,
+    allow_absolute_includes: bool = False,
+    allow_include_escape: bool = False,
 ) -> IRDoc:
     """
     Performs compilation of a SANS script into an IRDoc without validation.
@@ -113,6 +113,26 @@ def compile_script(
         
     """
     
+    # 0. Macro Preprocessing
+    try:
+        text = preprocess_text(
+            text,
+            file_name,
+            include_roots=include_roots,
+            allow_absolute_includes=allow_absolute_includes,
+            allow_include_escape=allow_include_escape,
+        )
+    except MacroError as e:
+        err_file = e.file or file_name
+        err_line = e.line or 1
+        return IRDoc(steps=[
+            UnknownBlockStep(
+                code="SANS_PARSE_MACRO_ERROR",
+                message=str(e),
+                loc=Loc(err_file, err_line, err_line),
+            )
+        ])
+
     # 1. detect_refusal() - Early exit for known dangerous constructs
     refusal = detect_refusal(text, file_name)
     if refusal:
@@ -208,11 +228,53 @@ def compile_script(
         return IRDoc(steps=ir_steps, table_facts=tf_objects)
     return IRDoc(steps=ir_steps, tables=tables, table_facts=tf_objects)
 
+
+def compile_sans_script(
+    text: str,
+    file_name: str = "<string>",
+    tables: Optional[Set[str]] = None,
+    initial_table_facts: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> IRDoc:
+    """
+    Compile a .sans script into an IRDoc.
+    """
+    try:
+        script = parse_sans_script(text, file_name)
+        steps, references = lower_script(script, file_name)
+    except SansScriptError as err:
+        table_set = set(tables) if tables else set()
+        tf_objects: Dict[str, TableFact] = {}
+        if initial_table_facts:
+            for table_name, facts_dict in initial_table_facts.items():
+                tf_objects[table_name] = TableFact(**facts_dict)
+        return IRDoc(
+            steps=[
+                UnknownBlockStep(
+                    code=err.code,
+                    message=err.message,
+                    loc=Loc(file_name, err.line, err.line),
+                )
+            ],
+            tables=table_set,
+            table_facts=tf_objects,
+        )
+
+    tf_objects: Dict[str, TableFact] = {}
+    if initial_table_facts:
+        for table_name, facts_dict in initial_table_facts.items():
+            tf_objects[table_name] = TableFact(**facts_dict)
+    table_set = set(tables) if tables else set()
+    table_set.update(references)
+    return IRDoc(steps=steps, tables=table_set, table_facts=tf_objects)
+
 def check_script(
     text: str,
     file_name: str = "<string>",
     tables: Optional[Set[str]] = None,
     initial_table_facts: Optional[Dict[str, Dict[str, Any]]] = None,
+    include_roots: Optional[List[Path]] = None,
+    allow_absolute_includes: bool = False,
+    allow_include_escape: bool = False,
 ) -> IRDoc:
     """
     Performs a full compilation check of a SANS script (compile + validate).
@@ -222,6 +284,9 @@ def check_script(
         file_name=file_name,
         tables=tables,
         initial_table_facts=initial_table_facts,
+        include_roots=include_roots,
+        allow_absolute_includes=allow_absolute_includes,
+        allow_include_escape=allow_include_escape,
     )
     validated_table_facts = initial_irdoc.validate()
     return IRDoc(steps=initial_irdoc.steps, tables=initial_irdoc.tables, table_facts=validated_table_facts)
@@ -237,6 +302,9 @@ def emit_check_artifacts(
     strict: bool = True,
     allow_approx: bool = False,
     tolerance: Optional[Dict[str, Any]] = None,
+    include_roots: Optional[List[Path]] = None,
+    allow_absolute_includes: bool = False,
+    allow_include_escape: bool = False,
 ) -> Tuple[IRDoc, Dict[str, Any]]:
     """
     Compile + validate, then emit plan and report artifacts.
@@ -244,14 +312,40 @@ def emit_check_artifacts(
     """
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+    use_sans_script = Path(file_name).suffix.lower() == ".sans"
+
+    if not use_sans_script:
+        try:
+            processed_text = preprocess_text(
+                text,
+                file_name,
+                include_roots=include_roots,
+                allow_absolute_includes=allow_absolute_includes,
+                allow_include_escape=allow_include_escape,
+            )
+            (out_path / "preprocessed.sas").write_text(processed_text, encoding="utf-8")
+        except MacroError:
+            # We allow compilation to handle the error and report it in the IR
+            pass
 
     compile_start = perf_counter()
-    irdoc = compile_script(
-        text=text,
-        file_name=file_name,
-        tables=tables,
-        initial_table_facts=initial_table_facts,
-    )
+    if use_sans_script:
+        irdoc = compile_sans_script(
+            text=text,
+            file_name=file_name,
+            tables=tables,
+            initial_table_facts=initial_table_facts,
+        )
+    else:
+        irdoc = compile_script(
+            text=text,
+            file_name=file_name,
+            tables=tables,
+            initial_table_facts=initial_table_facts,
+            include_roots=include_roots,
+            allow_absolute_includes=allow_absolute_includes,
+            allow_include_escape=allow_include_escape,
+        )
     compile_ms = int((perf_counter() - compile_start) * 1000)
 
     validation_error: Optional[UnknownBlockStep] = None
@@ -312,7 +406,7 @@ def emit_check_artifacts(
             {"path": file_name, "sha256": _sha256_text(text)}
         ],
         "outputs": [
-            {"path": str(plan_path), "sha256": _sha256_path(plan_path)},
+            {"path": str(plan_path), "sha256": compute_artifact_hash(plan_path)},
             {"path": str(report_path), "sha256": None},
         ],
         "plan_path": str(plan_path),
@@ -330,7 +424,7 @@ def emit_check_artifacts(
     }
 
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    report_sha = _sha256_path(report_path)
+    report_sha = compute_artifact_hash(report_path)
     if report_sha:
         report["outputs"][1]["sha256"] = report_sha
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
