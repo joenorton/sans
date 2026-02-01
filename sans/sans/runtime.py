@@ -9,9 +9,12 @@ from time import perf_counter
 
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
 from .compiler import emit_check_artifacts
-from .hash_utils import compute_artifact_hash
+from .hash_utils import compute_artifact_hash, compute_raw_hash
 from .xpt import load_xpt_with_warnings, dump_xpt, XptError
+from . import __version__ as _engine_version
 import json
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 
@@ -30,6 +33,7 @@ class ExecutionResult:
     diagnostics: List[RuntimeDiagnostic]
     outputs: List[Dict[str, Any]]
     execute_ms: Optional[int]
+    step_evidence: Optional[List[Dict[str, Any]]] = None
 
 
 class RuntimeFailure(Exception):
@@ -1003,6 +1007,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
     outputs: List[Dict[str, Any]] = []
+    step_evidence: List[Dict[str, Any]] = []
 
     try:
         tables: Dict[str, List[Dict[str, Any]]] = {}
@@ -1025,7 +1030,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
             else:
                 tables[name] = _load_csv(path)
 
-        for step in ir_doc.steps:
+        for step_idx, step in enumerate(ir_doc.steps):
             if isinstance(step, UnknownBlockStep):
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
@@ -1110,6 +1115,14 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                     # step_outputs is Dict[str, List[Dict[str, Any]]]
                     for out_table, out_rows in step_outputs.items():
                         tables[out_table] = out_rows
+                    
+                    step_evidence.append({
+                        "step_index": step_idx,
+                        "op": op,
+                        "inputs": list(step.inputs),
+                        "outputs": list(step.outputs),
+                        "row_counts": {t: len(rows) for t, rows in step_outputs.items()}
+                    })
                     continue # Already updated tables
                 elif op == "transpose":
                     output_rows = _execute_transpose(step, tables)
@@ -1147,6 +1160,14 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
 
             for output in step.outputs:
                 tables[output] = output_rows
+            
+            step_evidence.append({
+                "step_index": step_idx,
+                "op": op,
+                "inputs": list(step.inputs),
+                "outputs": list(step.outputs),
+                "row_counts": {t: len(output_rows) for t in step.outputs}
+            })
 
         # Determine outputs to emit: all terminal tables plus explicit non-terminal tables
         # (skip compiler temp tables marked by "__" in their names).
@@ -1200,6 +1221,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
             diagnostics=diagnostics,
             outputs=outputs,
             execute_ms=int((perf_counter() - start) * 1000),
+            step_evidence=step_evidence
         )
 
     except RuntimeFailure as err:
@@ -1209,6 +1231,7 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
             diagnostics=diagnostics,
             outputs=outputs,
             execute_ms=int((perf_counter() - start) * 1000),
+            step_evidence=step_evidence
         )
 
 
@@ -1287,11 +1310,78 @@ def run_script(
         report["primary_error"] = None
 
     # Extend outputs with runtime outputs and hashes if available.
+    runtime_out_entries = []
     for out in result.outputs:
         path = Path(out["path"])
-        report["outputs"].append(
-            {"path": str(path), "sha256": compute_artifact_hash(path)}
-        )
+        entry = {"path": str(path), "sha256": compute_artifact_hash(path)}
+        report["outputs"].append(entry)
+        runtime_out_entries.append({
+            "table": out["table"],
+            "path": str(path),
+            "bytes_sha256": compute_raw_hash(path),
+            "canonical_sha256": entry["sha256"],
+            "rows": out["rows"],
+            "columns": out["columns"]
+        })
+
+    # 1. Emit registry.candidate.json
+    from .sans_script.canon import canonical_step_payload, compute_step_id
+    registry = {
+        "registry_version": "v0.1",
+        "transforms": [],
+        "index": {}
+    }
+    seen_transforms = {}
+    for step_idx, step in enumerate(irdoc.steps):
+        if isinstance(step, OpStep):
+            t_id = compute_step_id(step)
+            if t_id not in seen_transforms:
+                payload = canonical_step_payload(step)
+                transform_entry = {
+                    "transform_id": t_id,
+                    "kind": step.op,
+                    "spec": payload["params"],
+                    "io_signature": {
+                        "inputs": payload["inputs"],
+                        "outputs": payload["outputs"]
+                    }
+                }
+                registry["transforms"].append(transform_entry)
+                seen_transforms[t_id] = True
+            registry["index"][str(step_idx)] = t_id
+
+    registry_path = Path(out_dir) / "registry.candidate.json"
+    registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    report["outputs"].append({"path": str(registry_path), "sha256": compute_artifact_hash(registry_path)})
+
+    # 2. Emit runtime.evidence.json
+    evidence = {
+        "sans_version": _engine_version,
+        "run_id": str(uuid.uuid4()),
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "plan_ir": {
+            "path": "plan.ir.json",
+            "sha256": compute_raw_hash(Path(out_dir) / "plan.ir.json")
+        },
+        "bindings": bindings,
+        "inputs": [],
+        "outputs": runtime_out_entries,
+        "step_evidence": result.step_evidence or []
+    }
+    
+    for inp in report.get("inputs", []):
+        p = Path(inp["path"])
+        evidence["inputs"].append({
+            "name": inp.get("table"),
+            "path": inp["path"],
+            "format": p.suffix.lstrip(".").lower() or "csv",
+            "bytes_sha256": compute_raw_hash(p),
+            "canonical_sha256": inp.get("sha256")
+        })
+
+    evidence_path = Path(out_dir) / "runtime.evidence.json"
+    evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+    report["outputs"].append({"path": str(evidence_path), "sha256": compute_artifact_hash(evidence_path)})
 
     report_path = Path(out_dir) / "report.json"
     

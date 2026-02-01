@@ -139,12 +139,17 @@ def test_double_run_determinism(tmp_path):
             for item in data.get(io_list, []):
                 p = Path(item["path"])
                 item["path"] = p.name
+        
         data["plan_path"] = Path(data["plan_path"]).name
-        # Self-hash of report will also differ if paths or timing differ
-        # So we clear it
+        # Self-hash of report and other new artifacts will differ if paths or timing differ
+        # Or if they contain non-deterministic data like UUIDs.
         for out in data.get("outputs", []):
-            if "report.json" in out["path"]:
+            out_path = Path(out["path"])
+            out["path"] = out_path.name
+            if out_path.name in ["report.json", "runtime.evidence.json"]:
                 out["sha256"] = None
+        
         return data
 
     assert clean_report(out1 / "report.json") == clean_report(out2 / "report.json")
+        

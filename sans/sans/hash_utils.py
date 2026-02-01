@@ -41,6 +41,16 @@ def _canonicalize_text(path: Path) -> bytes:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text.encode("utf-8")
 
+def compute_raw_hash(path: Path) -> Optional[str]:
+    """Computes the raw SHA-256 hash of a file's bytes."""
+    if not path.exists():
+        return None
+    try:
+        data = path.read_bytes()
+        return hashlib.sha256(data).hexdigest()
+    except OSError:
+        return None
+
 def compute_artifact_hash(path: Path) -> Optional[str]:
     """
     Computes a deterministic hash of a file.
