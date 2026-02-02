@@ -29,6 +29,43 @@ from .ast import (
 from .errors import SansScriptError
 
 
+def normalize_decimal_string(s: str) -> str:
+    """Canonicalize decimal literal string for IR storage. Deterministic; no exponent."""
+    s = s.strip()
+    # 4) Strip leading "+" if present
+    if s.startswith("+"):
+        s = s[1:]
+    # 2) If starts with ".", prepend "0"; if "-.", make "-0."
+    if s.startswith("."):
+        s = "0" + s
+    elif s.startswith("-."):
+        s = "-0" + s[2:]
+    # 3) If ends with ".", drop the dot
+    if s.endswith(".") and len(s) > 1:
+        s = s[:-1]
+    # Split integer and fractional
+    if "." in s:
+        int_part, frac_part = s.split(".", 1)
+    else:
+        int_part = s
+        frac_part = ""
+    # Handle sign
+    if int_part.startswith("-"):
+        sign = "-"
+        int_part = int_part[1:]
+    else:
+        sign = ""
+    # 5) Remove leading zeros in integer part; leave one if all zeros
+    int_part = int_part.lstrip("0") or "0"
+    # 6) Strip trailing zeros in fractional part; if empty, remove the dot
+    frac_part = frac_part.rstrip("0")
+    result = sign + int_part + ("." + frac_part if frac_part else "")
+    # 7) Normalize negative zero forms to "0"
+    if result == "-0":
+        return "0"
+    return result
+
+
 class _Line:
     def __init__(self, text: str, number: int) -> None:
         self.text = text
@@ -346,8 +383,8 @@ class SansScriptParser:
                 message="const decimal literals do not support exponent notation (e.g. 1e-3).",
                 line=line_no,
             )
-        if re.match(r"^-?\d+\.\d*$|^-?\d*\.\d+$", text):
-            return {"type": "decimal", "value": text}
+        if re.match(r"^[+-]?\d+\.\d*$|^[+-]?\d*\.\d+$", text):
+            return {"type": "decimal", "value": normalize_decimal_string(text)}
         raise SansScriptError(
             code="E_PARSE",
             message=f"const allows only int, decimal, string, bool, null; got '{text}'.",

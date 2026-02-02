@@ -355,14 +355,20 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
         if op in {"+", "-", "*", "/"}:
             if left is None or right is None:
                 return None
-            # Decimal semantics when either operand is Decimal (exact decimal, no float)
+            # Decimal semantics when either operand is Decimal (exact decimal; no Python float)
             if isinstance(left, Decimal) or isinstance(right, Decimal):
-                L = left if isinstance(left, Decimal) else Decimal(str(left)) if isinstance(left, (int, float)) else left
-                R = right if isinstance(right, Decimal) else Decimal(str(right)) if isinstance(right, (int, float)) else right
+                if isinstance(left, float) or isinstance(right, float):
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_DECIMAL_NO_FLOAT",
+                        "Python floats are not permitted in decimal arithmetic; use int or decimal literal.",
+                        None,
+                    )
+                L = left if isinstance(left, Decimal) else (Decimal(str(left)) if isinstance(left, (int, str)) else left)
+                R = right if isinstance(right, Decimal) else (Decimal(str(right)) if isinstance(right, (int, str)) else right)
                 if not isinstance(L, Decimal) or not isinstance(R, Decimal):
                     raise RuntimeFailure(
                         "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
-                        "Decimal ops require numeric operands.",
+                        "Decimal ops require numeric operands (int, str, or decimal).",
                     )
                 if op == "+":
                     return L + R

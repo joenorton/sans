@@ -1,6 +1,8 @@
 import json
+import pytest
 from sans.compiler import compile_sans_script, UnknownBlockStep
 from sans.ir import OpStep
+from sans.runtime import _eval_expr, RuntimeFailure
 from pathlib import Path
 
 DEMO_SANS = Path("demo/sans_script/demo.sans")
@@ -21,6 +23,96 @@ out
     assert "pi" in bindings
     assert bindings["pi"] == {"type": "decimal", "value": "3.14"}
     assert not any(isinstance(s, UnknownBlockStep) and s.severity == "fatal" for s in irdoc.steps)
+
+
+def test_const_decimal_normalization():
+    """Decimal literal strings are normalized at parse-time so equal values hash identically."""
+    # .5 -> 0.5
+    irdoc = compile_sans_script(
+        """# sans 0.1
+const { a = .5 }
+datasource in = csv("x.csv")
+table t = from(in) do
+  derive(x = 1)
+end
+t
+""", "test.sans", tables={"in"}
+    )
+    const_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "const")
+    bindings = const_step.params.get("bindings") or {}
+    assert bindings.get("a") == {"type": "decimal", "value": "0.5"}
+
+    # 3.140 -> 3.14
+    irdoc = compile_sans_script(
+        """# sans 0.1
+const { a = 3.140 }
+datasource in = csv("x.csv")
+table t = from(in) do
+  derive(x = 1)
+end
+t
+""", "test.sans", tables={"in"}
+    )
+    bindings = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "const").params.get("bindings") or {}
+    assert bindings.get("a") == {"type": "decimal", "value": "3.14"}
+
+    # 3.0 -> 3
+    irdoc = compile_sans_script(
+        """# sans 0.1
+const { a = 3.0 }
+datasource in = csv("x.csv")
+table t = from(in) do
+  derive(x = 1)
+end
+t
+""", "test.sans", tables={"in"}
+    )
+    bindings = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "const").params.get("bindings") or {}
+    assert bindings.get("a") == {"type": "decimal", "value": "3"}
+
+    # -0.00 -> 0
+    irdoc = compile_sans_script(
+        """# sans 0.1
+const { a = -0.00 }
+datasource in = csv("x.csv")
+table t = from(in) do
+  derive(x = 1)
+end
+t
+""", "test.sans", tables={"in"}
+    )
+    bindings = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "const").params.get("bindings") or {}
+    assert bindings.get("a") == {"type": "decimal", "value": "0"}
+
+    # Normal cases: preserve sign and digits
+    irdoc = compile_sans_script(
+        """# sans 0.1
+const { a = -12.34 }
+datasource in = csv("x.csv")
+table t = from(in) do
+  derive(x = 1)
+end
+t
+""", "test.sans", tables={"in"}
+    )
+    bindings = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "const").params.get("bindings") or {}
+    assert bindings.get("a") == {"type": "decimal", "value": "-12.34"}
+
+
+def test_decimal_arithmetic_rejects_float():
+    """Runtime raises SANS_RUNTIME_DECIMAL_NO_FLOAT when mixing Decimal with Python float."""
+    # expr: decimal_lit + col("x") with row x=1.5 (float)
+    node = {
+        "type": "binop",
+        "op": "+",
+        "left": {"type": "lit", "value": {"type": "decimal", "value": "3.14"}},
+        "right": {"type": "col", "name": "x"},
+    }
+    row = {"x": 1.5}
+    with pytest.raises(RuntimeFailure) as exc_info:
+        _eval_expr(node, row, None)
+    assert exc_info.value.code == "SANS_RUNTIME_DECIMAL_NO_FLOAT"
+    assert "float" in exc_info.value.message.lower()
 
 
 def test_summary_default_naming_and_ordering():
