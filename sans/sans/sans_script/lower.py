@@ -25,6 +25,40 @@ from .ast import (
 )
 
 
+def _substitute_const_in_expr(expr: Any, const_bindings: Dict[str, Any]) -> Any:
+    """Replace col nodes that reference a const name with lit nodes (compile-time substitution)."""
+    if not isinstance(expr, dict):
+        return expr
+    node_type = expr.get("type")
+    if node_type == "col":
+        name = (expr.get("name") or "").lower()
+        if name in const_bindings:
+            return {"type": "lit", "value": const_bindings[name]}
+        return expr
+    if node_type == "lit":
+        return expr
+    if node_type in ("binop", "boolop"):
+        out = dict(expr)
+        if "left" in out:
+            out["left"] = _substitute_const_in_expr(out["left"], const_bindings)
+        if "right" in out:
+            out["right"] = _substitute_const_in_expr(out["right"], const_bindings)
+        if "args" in out:
+            out["args"] = [_substitute_const_in_expr(a, const_bindings) for a in out["args"]]
+        return out
+    if node_type == "unop":
+        out = dict(expr)
+        if "arg" in out:
+            out["arg"] = _substitute_const_in_expr(out["arg"], const_bindings)
+        return out
+    if node_type == "call":
+        out = dict(expr)
+        if "args" in out:
+            out["args"] = [_substitute_const_in_expr(a, const_bindings) for a in out["args"]]
+        return out
+    return expr
+
+
 class Lowerer:
     def __init__(self, file_name: str):
         self.file_name = file_name
@@ -32,12 +66,18 @@ class Lowerer:
         self.referenced: Set[str] = set()
         self.produced: Set[str] = set()
         self.temp_count = 0
+        self.const_bindings: Dict[str, Any] = {}
 
     def next_temp(self) -> str:
         self.temp_count += 1
         return f"__t{self.temp_count}__"
 
     def lower(self, script: SansScript) -> Tuple[List[OpStep], Set[str]]:
+        # Pre-pass: collect all const bindings for compile-time substitution into expressions
+        for stmt in script.statements:
+            if isinstance(stmt, ConstDecl):
+                for k, v in stmt.bindings.items():
+                    self.const_bindings[k.lower()] = v
         for stmt in script.statements:
             if isinstance(stmt, LetBinding):
                 self._lower_let(stmt)
@@ -253,7 +293,7 @@ class Lowerer:
                 params = {
                     "mode": mode,
                     "assignments": [
-                        {"target": a["target"], "expr": a["expr"]}
+                        {"target": a["target"], "expr": _substitute_const_in_expr(a["expr"], self.const_bindings)}
                         for a in group
                     ],
                 }

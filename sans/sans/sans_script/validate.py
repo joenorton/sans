@@ -10,8 +10,12 @@ from .errors import SansScriptError
 
 
 def _is_const_literal(val: Any) -> bool:
-    """True if val is an allowed const literal: int, str, bool, or None (null)."""
-    return val is None or isinstance(val, (int, str, bool))
+    """True if val is an allowed const literal: int, str, bool, None (null), or decimal {type, value}."""
+    if val is None or isinstance(val, (int, str, bool)):
+        return True
+    if isinstance(val, dict) and val.get("type") == "decimal" and isinstance(val.get("value"), str):
+        return True
+    return False
 
 
 class SemanticValidator:
@@ -53,7 +57,7 @@ class SemanticValidator:
                 if not _is_const_literal(val):
                     raise SansScriptError(
                         code="E_BAD_EXPR",
-                        message=f"const allows only int, string, bool, null; got {type(val).__name__}.",
+                        message=f"const allows only int, decimal, string, bool, null; got {type(val).__name__}.",
                         line=stmt.span.start,
                     )
                 self.scalars[name] = stmt.span.start

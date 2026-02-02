@@ -298,7 +298,7 @@ class SansScriptParser:
                 code="E_PARSE",
                 message="const must be followed by { name = literal, ... }.",
                 line=line.number,
-                hint="Allowed literal types: int, string, bool, null",
+                hint="Allowed literal types: int, decimal, string, bool, null",
             )
         inner = rest[1:-1].strip()
         bindings: Dict[str, Any] = {}
@@ -323,7 +323,7 @@ class SansScriptParser:
         return ConstDecl(bindings=bindings, span=SourceSpan(line.number, line.number))
 
     def _parse_const_literal(self, text: str, line_no: int) -> Any:
-        """Parse a single literal: int, quoted string, true/false, null. No floats, arrays, or nested objects."""
+        """Parse a single literal: int, decimal, quoted string, true/false, null. No exponent notation (1e-3)."""
         text = text.strip()
         if not text:
             raise SansScriptError(code="E_PARSE", message="const value cannot be empty.", line=line_no)
@@ -339,11 +339,20 @@ class SansScriptParser:
             return int(text)
         except ValueError:
             pass
+        # Decimal: exact decimal literal, canonical as string. Reject exponent notation.
+        if "e" in text.lower():
+            raise SansScriptError(
+                code="E_PARSE",
+                message="const decimal literals do not support exponent notation (e.g. 1e-3).",
+                line=line_no,
+            )
+        if re.match(r"^-?\d+\.\d*$|^-?\d*\.\d+$", text):
+            return {"type": "decimal", "value": text}
         raise SansScriptError(
             code="E_PARSE",
-            message=f"const allows only int, string, bool, null; got '{text}'.",
+            message=f"const allows only int, decimal, string, bool, null; got '{text}'.",
             line=line_no,
-            hint="No floats, arrays, or nested objects.",
+            hint="Decimal: digits.digits (no exponent).",
         )
 
     def _parse_table_binding(self, line: _Line) -> TableBinding:

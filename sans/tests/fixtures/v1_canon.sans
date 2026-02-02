@@ -4,7 +4,7 @@ datasource in = inline_csv do
   6,7
   3,2
 end
-const { pi = 3 }
+const { pi = 3.14 }
 table t = from(in) do
   derive(v2 = b * 2)
   filter(v2 > 10)

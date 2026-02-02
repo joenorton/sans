@@ -247,10 +247,17 @@ def _apply_dataset_options(
     return output_rows
 
 
+def _lit_value_to_python(val: Any) -> Any:
+    """Resolve IR lit value to Python value. Decimal constants stay as Decimal (exact)."""
+    if isinstance(val, dict) and val.get("type") == "decimal" and isinstance(val.get("value"), str):
+        return Decimal(val["value"])
+    return val
+
+
 def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict[str, Dict[str, Any]]] = None) -> Any:
     node_type = node.get("type")
     if node_type == "lit":
-        return node.get("value")
+        return _lit_value_to_python(node.get("value"))
     if node_type == "col":
         return row.get(node.get("name"))
     if node_type == "call":
@@ -348,6 +355,23 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
         if op in {"+", "-", "*", "/"}:
             if left is None or right is None:
                 return None
+            # Decimal semantics when either operand is Decimal (exact decimal, no float)
+            if isinstance(left, Decimal) or isinstance(right, Decimal):
+                L = left if isinstance(left, Decimal) else Decimal(str(left)) if isinstance(left, (int, float)) else left
+                R = right if isinstance(right, Decimal) else Decimal(str(right)) if isinstance(right, (int, float)) else right
+                if not isinstance(L, Decimal) or not isinstance(R, Decimal):
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
+                        "Decimal ops require numeric operands.",
+                    )
+                if op == "+":
+                    return L + R
+                if op == "-":
+                    return L - R
+                if op == "*":
+                    return L * R
+                if op == "/":
+                    return L / R
             if op == "+":
                 return left + right
             if op == "-":
@@ -381,7 +405,11 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
         if op == "+":
             return +arg if arg is not None else None
         if op == "-":
-            return -arg if arg is not None else None
+            if arg is None:
+                return None
+            if isinstance(arg, Decimal):
+                return -arg
+            return -arg
         raise RuntimeFailure(
             "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
             f"Unsupported unary operator '{op}'",
@@ -400,7 +428,7 @@ def _eval_expr_assert(
     """Evaluate an assert predicate with access to tables (e.g. row_count(t))."""
     node_type = node.get("type")
     if node_type == "lit":
-        return node.get("value")
+        return _lit_value_to_python(node.get("value"))
     if node_type == "col":
         # In assert context there is no row; column refs evaluate to None (e.g. for comparison).
         return _eval_expr(node, {}, formats)

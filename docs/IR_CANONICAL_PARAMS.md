@@ -3,6 +3,7 @@
 **Rules:**
 - Consumers (runtime, printer, hash, registry) assume **canonical params only**.
 - Any ingestion sugar must be **normalized in `IRDoc.validate()`**.
+- Decimal constants: represented as `{type: "decimal", value: "<string>"}` (exact decimal; no Python float). Hashing/canonicalization uses the string value.
 
 | op | canonical params shape | normalized in validate? | legacy/sugar accepted (where normalized) |
 |----|------------------------|-------------------------|----------------------------------------|
@@ -17,7 +18,7 @@
 | save | (output binding / path) | n/a | — |
 | assert | (predicate / table) | n/a | — |
 | let_scalar | (name, expr) | n/a | — |
-| const | (name, value) | n/a | — |
+| const | `bindings`: name → literal (int, str, bool, null, or decimal) | n/a | Decimal: `{type: "decimal", value: "<string>"}` (exact decimal; no exponent). |
 | data_step | `by`?, keep/drop?, `assign`? (SAS subset) | n/a | — |
 | transpose | `by`, `id`, `var` | n/a | — |
 | sql_select | (query / group_by etc.) | n/a | — |

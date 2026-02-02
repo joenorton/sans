@@ -31,7 +31,7 @@
   let name = <scalar-expr>
   ```
 
-* multiple named scalar **literals** use `const` (compile-time only; int, string, bool, null):
+* multiple named scalar **literals** use `const` (compile-time only; int, decimal, string, bool, null). Decimal literals are exact (e.g. 3.14); no exponent notation. Canonical IR: `{type: "decimal", value: "<string>"}`.
 
   ```
   const { name = literal, ... }

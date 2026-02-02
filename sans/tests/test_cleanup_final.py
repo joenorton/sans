@@ -5,6 +5,24 @@ from pathlib import Path
 
 DEMO_SANS = Path("demo/sans_script/demo.sans")
 
+def test_const_decimal_canonical():
+    """const { pi = 3.14 } parses and produces canonical decimal in IR (no Python float)."""
+    script = """# sans 0.1
+datasource in = csv("in.csv")
+const { pi = 3.14 }
+table out = from(in) do
+  derive(x = 1)
+end
+out
+"""
+    irdoc = compile_sans_script(script, "test.sans", tables={"in"})
+    const_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "const")
+    bindings = const_step.params.get("bindings") or {}
+    assert "pi" in bindings
+    assert bindings["pi"] == {"type": "decimal", "value": "3.14"}
+    assert not any(isinstance(s, UnknownBlockStep) and s.severity == "fatal" for s in irdoc.steps)
+
+
 def test_summary_default_naming_and_ordering():
     script = """# sans 0.1
 datasource in = csv("in.csv")

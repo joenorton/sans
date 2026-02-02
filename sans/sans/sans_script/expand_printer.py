@@ -179,6 +179,8 @@ def _step_to_expanded(step: OpStep) -> List[str]:
                 v_str = f'"{v}"'
             elif isinstance(v, int):
                 v_str = str(v)
+            elif isinstance(v, dict) and v.get("type") == "decimal" and isinstance(v.get("value"), str):
+                v_str = v["value"]
             else:
                 v_str = "null"
             parts.append(f"{k} = {v_str}")

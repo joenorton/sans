@@ -33,8 +33,8 @@ class LetBinding:
 
 @dataclass
 class ConstDecl:
-    """Multiple named scalar literals: const { a = 1, b = "x" }. Lowers to one IR op 'const'. Literals only: int, str, bool, null."""
-    bindings: Dict[str, Any]  # name -> literal (int, str, bool, None)
+    """Multiple named scalar literals: const { a = 1, b = "x", pi = 3.14 }. Lowers to one IR op 'const'. Literals: int, decimal ({type, value}), str, bool, null."""
+    bindings: Dict[str, Any]  # name -> literal (int, decimal dict, str, bool, None)
     span: SourceSpan
 
 
