@@ -70,6 +70,17 @@ Determinism rules (v0.1)
 - `sort` may apply `nodupkey` with first-wins after sorting by keys.
 - Group output ordering (if/when added) must be explicit.
 
+Cast op (v0.1)
+- Op name: `cast`
+- Params:
+  - `casts`: list of `{col: str, to: str, on_error: "fail"|"null", trim: bool}`
+  - `to` ∈ {str, int, decimal, bool, date, datetime}
+  - `on_error`: `"fail"` (default) — first failure fails the step; `"null"` — put null for non-convertible values
+  - `trim`: optional; if true, strip leading/trailing whitespace before parse
+- Semantics:
+  - Standalone IR step; one input table, one output table.
+  - Row order preserved. Evidence: step_evidence includes `cast_failures` and `nulled` counts.
+
 Format op (minimal subset)
 - Op name: `format`
 - Params:

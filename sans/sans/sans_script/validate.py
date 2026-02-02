@@ -249,6 +249,19 @@ class SemanticValidator:
                     )
                 return final_schema
             return None
+        elif kind == "cast":
+            casts = params.get("casts") or []
+            if schema is not None:
+                for c in casts:
+                    col = c.get("col", "")
+                    if col not in schema:
+                        raise SansScriptError(
+                            code="E_UNKNOWN_COLUMN",
+                            message=f"Cannot cast non-existent column '{col}'.",
+                            line=line,
+                            hint=f"Available columns: {', '.join(schema)}",
+                        )
+            return schema
         return schema
 
     def _validate_map_expr(self, expr: MapExpr):

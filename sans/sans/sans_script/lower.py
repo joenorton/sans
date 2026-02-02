@@ -315,6 +315,16 @@ class Lowerer:
                 loc=self._loc(transform.span)
             ))
             return output_table
+        elif transform.kind == "cast":
+            casts = transform.params.get("casts") or []
+            self.steps.append(OpStep(
+                op="cast",
+                inputs=[input_table],
+                outputs=[output_table],
+                params={"casts": casts},
+                loc=self._loc(transform.span),
+            ))
+            return output_table
         return output_table
 
     def _loc(self, span: SourceSpan) -> Loc:

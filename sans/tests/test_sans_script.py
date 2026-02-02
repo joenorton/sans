@@ -392,3 +392,96 @@ def test_sort_missing_by_refused():
         assert False, "Should have failed validation"
     except UnknownBlockStep as err:
         assert err.code == "E_SANS_VALIDATE_SORT_MISSING_BY"
+
+
+def test_cast_parse_and_expanded():
+    """Cast transform parses and prints canonically in expanded.sans."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  1,2.5\n"
+        "  3,4\n"
+        "end\n"
+        "table t = from(in) do\n"
+        "  cast(a -> str, b -> decimal on_error=null trim=true)\n"
+        "end\n"
+    )
+    irdoc = compile_sans_script(script, "cast.sans", tables=set())
+    assert not any(
+        isinstance(s, UnknownBlockStep) and getattr(s, "severity", "") == "fatal"
+        for s in irdoc.steps
+    )
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    assert "cast(" in expanded
+    assert "a -> str" in expanded
+    assert "b -> decimal" in expanded
+    assert "on_error=null" in expanded
+    assert "trim=true" in expanded
+    # Find cast step in IR
+    cast_steps = [s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "cast"]
+    assert len(cast_steps) == 1
+    casts = cast_steps[0].params.get("casts") or []
+    assert len(casts) >= 2
+    col_to = {(c["col"], c["to"]): c for c in casts}
+    assert ("a", "str") in col_to
+    assert ("b", "decimal") in col_to
+    assert col_to.get(("b", "decimal"), {}).get("on_error") == "null"
+    assert col_to.get(("b", "decimal"), {}).get("trim") is True
+
+
+def test_cast_round_trip_byte():
+    """expanded.sans with cast → IR → expanded.sans is byte-identical."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  1,2\n"
+        "end\n"
+        "table t = from(in) cast(a -> int, b -> str)\n"
+    )
+    irdoc = compile_sans_script(script, "cast_rt.sans", tables=set())
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    irdoc2 = compile_sans_script(expanded, "expanded.sans", tables=set())
+    assert not any(
+        isinstance(s, UnknownBlockStep) and getattr(s, "severity", "") == "fatal"
+        for s in irdoc2.steps
+    )
+    validated2 = IRDoc(
+        steps=irdoc2.steps,
+        tables=irdoc2.tables,
+        table_facts=irdoc2.table_facts,
+        datasources=irdoc2.datasources,
+    ).validate()
+    irdoc2 = IRDoc(
+        steps=irdoc2.steps,
+        tables=irdoc2.tables,
+        table_facts=validated2,
+        datasources=irdoc2.datasources,
+    )
+    expanded2 = irdoc_to_expanded_sans(irdoc2)
+    assert expanded == expanded2, "cast round-trip should be byte-identical"

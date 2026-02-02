@@ -526,7 +526,7 @@ class SansScriptParser:
             processed_content = content
             processed_lowered = lowered
 
-            for k in ["select", "filter", "derive", "rename", "drop", "update!"]:
+            for k in ["select", "filter", "derive", "rename", "drop", "update!", "cast"]:
                 if processed_lowered.startswith(k + " ") or processed_lowered.startswith(k + "("):
                     kw = k
                     kw_len = len(k)
@@ -686,7 +686,7 @@ class SansScriptParser:
                 if next_line:
                     s = next_line.stripped.lower()
                     # Check if it looks like a postfix clause or bracket sugar
-                    if s.startswith("[") or any(s.startswith(kw + " ") or s.startswith(kw + "(") for kw in ["select", "filter", "derive", "rename", "drop", "update!"]):
+                    if s.startswith("[") or any(s.startswith(kw + " ") or s.startswith(kw + "(") for kw in ["select", "filter", "derive", "rename", "drop", "update!", "cast"]):
                         self._next_content_line() # consume it
                         curr_rem = next_line.stripped
                         curr_end_line = next_line.number
@@ -706,7 +706,7 @@ class SansScriptParser:
                 curr_rem = match.group(2).strip()
                 continue
 
-            match = re.match(r"(select|filter|derive|rename|drop|update!)(?:\s+|\()", curr_rem, re.IGNORECASE)
+            match = re.match(r"(select|filter|derive|rename|drop|update!|cast)(?:\s+|\()", curr_rem, re.IGNORECASE)
             if not match:
                 break
             
@@ -720,7 +720,7 @@ class SansScriptParser:
             else:
                  args_part = curr_rem[len(kind):].strip()
                  # Simple heuristic: split by next keyword
-                 next_kw_match = re.search(r"\s+(select|filter|derive|rename|drop|update!)(?:\s+|\()", args_part, re.IGNORECASE)
+                 next_kw_match = re.search(r"\s+(select|filter|derive|rename|drop|update!|cast)(?:\s+|\()", args_part, re.IGNORECASE)
                  if next_kw_match:
                      this_args = args_part[:next_kw_match.start()].strip()
                      curr_rem = args_part[next_kw_match.start():].strip()
@@ -768,7 +768,11 @@ class SansScriptParser:
             if args_str.startswith("(") and args_str.endswith(")"):
                 args_str = args_str[1:-1].strip()
             params["mappings"] = self._parse_rename_mappings(args_str, line_no)
-        
+        elif kind == "cast":
+            if args_str.startswith("(") and args_str.endswith(")"):
+                args_str = args_str[1:-1].strip()
+            params["casts"] = self._parse_cast_specs(args_str, line_no)
+
         return TableTransform(kind=kind, params=params, span=SourceSpan(line_no, line_no))
 
     def _parse_derive_assignments(self, text: str, line_no: int) -> List[Dict[str, Any]]:
@@ -804,6 +808,47 @@ class SansScriptParser:
             old, new = part.split("->")
             mappings[old.strip().lower()] = new.strip().lower()
         return mappings
+
+    def _parse_cast_specs(self, text: str, line_no: int) -> List[Dict[str, Any]]:
+        """Parse cast specs: col -> to [on_error=fail|null] [trim=true|false], ..."""
+        parts = self._split_by_comma_respecting_parens(text)
+        casts = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            if "->" not in part:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message=f"Cast spec must use 'col -> to': {part}",
+                    line=line_no,
+                )
+            main, rest = part.split("->", 1)
+            col = main.strip().lower()
+            rest = rest.strip()
+            # rest is "to [on_error=...] [trim=...]"
+            to_end = rest.find(" on_error=")
+            if to_end == -1:
+                to_end = rest.find(" trim=")
+            if to_end == -1:
+                to = rest.strip().lower()
+                on_error = "fail"
+                trim = False
+            else:
+                to = rest[:to_end].strip().lower()
+                tail = rest[to_end:].strip()
+                on_error = "fail"
+                trim = False
+                if "on_error=" in tail:
+                    m = re.search(r"on_error\s*=\s*(\w+)", tail, re.IGNORECASE)
+                    if m:
+                        on_error = m.group(1).strip().lower()
+                if "trim=" in tail:
+                    m = re.search(r"trim\s*=\s*(\w+)", tail, re.IGNORECASE)
+                    if m:
+                        trim = m.group(1).strip().lower() in ("true", "1", "yes")
+            casts.append({"col": col, "to": to, "on_error": on_error, "trim": trim})
+        return casts
 
     def _parse_map_expr(self, text: str, line_no: int) -> MapExpr:
         # map("A" -> "B", _ -> "C")

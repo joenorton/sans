@@ -193,6 +193,24 @@ def _step_to_expanded(step: OpStep) -> List[str]:
         lines.append(f"assert {pred_str}")
         return lines
 
+    if op == "cast" and inp and out:
+        casts = params.get("casts") or []
+        # Canonical: table out = inp cast(col -> to [on_error=...] [trim=...], ...); sorted by col for determinism
+        parts = []
+        for c in sorted(casts, key=lambda x: (x.get("col", ""), x.get("to", ""))):
+            col = c.get("col", "")
+            to = c.get("to", "")
+            on_err = c.get("on_error", "fail")
+            trim = c.get("trim", False)
+            part = f"{col} -> {to}"
+            if on_err != "fail":
+                part += f" on_error={on_err}"
+            if trim:
+                part += " trim=true"
+            parts.append(part)
+        lines.append(f"table {out} = {inp_ref} cast({', '.join(parts)})")
+        return lines
+
     if op == "save" and inputs:
         table = inputs[0]
         path = params.get("path") or ""

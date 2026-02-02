@@ -45,6 +45,7 @@ KNOWN_OPS = {
     "select",
     "rename",
     "sort",
+    "cast",
     "aggregate",
     "identity",
     "save",
@@ -173,6 +174,18 @@ def _assert_per_op_canonical_shapes(irdoc: IRDoc) -> None:
             assert assigns is not None and isinstance(assigns, list), (
                 f"Step {i} compute: assignments or assign list required"
             )
+
+        elif op == "cast":
+            casts = params.get("casts")
+            assert casts is not None, f"Step {i} cast: missing 'casts'"
+            assert isinstance(casts, list), f"Step {i} cast: 'casts' must be list"
+            assert len(casts) > 0, f"Step {i} cast: 'casts' must be non-empty"
+            for j, c in enumerate(casts):
+                assert isinstance(c, dict), f"Step {i} cast casts[{j}]: must be dict"
+                assert "col" in c and "to" in c
+                assert isinstance(c["col"], str) and isinstance(c["to"], str)
+                assert c.get("on_error", "fail") in ("fail", "null")
+                assert isinstance(c.get("trim", False), bool)
 
 
 def _assert_known_ops(irdoc: IRDoc) -> None:

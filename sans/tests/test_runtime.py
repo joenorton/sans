@@ -1251,3 +1251,47 @@ def test_run_merge_many_to_many_fails(tmp_path):
     primary = report["primary_error"]
     assert primary["code"] == "SANS_RUNTIME_MERGE_MANY_MANY"
     assert primary["loc"]["file"] == "merge_many.sas"
+
+
+def test_run_cast_sans(tmp_path):
+    """Sans script with cast runs and emits cast evidence."""
+    import json
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  1,2.5\n"
+        "  3,4\n"
+        "end\n"
+        "table t = from(in) do\n"
+        "  cast(a -> int, b -> decimal on_error=null trim=true)\n"
+        "end\n"
+        "save t to \"out.csv\"\n"
+    )
+    report = run_script(
+        text=script,
+        file_name="cast.sans",
+        bindings={},
+        out_dir=tmp_path,
+        strict=True,
+    )
+    assert report["status"] == "ok"
+    assert report["runtime"]["status"] == "ok"
+    out_csv = tmp_path / "out.csv"
+    assert out_csv.exists()
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["a", "b"]
+    assert len(rows) == 3  # header + 2 data
+    # a -> int: 1, 3; b -> decimal: 2.5, 4
+    assert rows[1][0] == "1"
+    assert rows[2][0] == "3"
+    # step_evidence in runtime.evidence.json includes cast step with cast_failures and nulled
+    evidence_path = tmp_path / "runtime.evidence.json"
+    assert evidence_path.exists()
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    step_evidence = evidence.get("step_evidence") or []
+    cast_ev = [e for e in step_evidence if e.get("op") == "cast"]
+    assert len(cast_ev) == 1
+    assert "cast_failures" in cast_ev[0]
+    assert "nulled" in cast_ev[0]

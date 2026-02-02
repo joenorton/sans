@@ -1076,6 +1076,122 @@ def _execute_sql_select(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -
     return output_rows
 
 
+def _cast_value(
+    val: Any,
+    to_type: str,
+    on_error: str,
+    trim: bool,
+) -> tuple[Any, Optional[str]]:
+    """
+    Convert val to target type. Returns (converted_value, error_message).
+    error_message is None on success; on failure returns message for evidence.
+    Trim: strip leading/trailing whitespace from string before parse.
+    """
+    if val is None:
+        return (None, None)
+    s = str(val)
+    if trim:
+        s = s.strip()
+
+    if to_type == "str":
+        return (str(val), None)
+
+    if to_type == "int":
+        s_parse = s.strip() if trim else s
+        s_parse = s_parse.strip()
+        if not s_parse:
+            return (None, "empty") if on_error == "null" else (None, "empty")
+        try:
+            return (int(s_parse), None)
+        except ValueError:
+            return (None, f"not_int:{s_parse!r}") if on_error == "null" else (None, f"not_int:{s_parse!r}")
+
+    if to_type == "decimal":
+        s_parse = s.strip() if trim else s
+        s_parse = s_parse.strip()
+        if not s_parse:
+            return (None, "empty") if on_error == "null" else (None, "empty")
+        try:
+            return (Decimal(s_parse), None)
+        except (ValueError, InvalidOperation):
+            return (None, f"not_decimal:{s_parse!r}") if on_error == "null" else (None, f"not_decimal:{s_parse!r}")
+
+    if to_type == "bool":
+        s_parse = s.strip().lower() if trim else s.lower()
+        if s_parse in ("true", "1", "yes"):
+            return (True, None)
+        if s_parse in ("false", "0", "no", ""):
+            return (False if s_parse != "" else None, None if s_parse != "" else "empty")
+        return (None, f"not_bool:{s!r}") if on_error == "null" else (None, f"not_bool:{s!r}")
+
+    if to_type == "date":
+        s_parse = s.strip() if trim else s
+        s_parse = s_parse.strip()
+        if not s_parse:
+            return (None, "empty") if on_error == "null" else (None, "empty")
+        try:
+            dt = datetime.fromisoformat(s_parse.replace("Z", "+00:00"))
+            return (dt.date().isoformat(), None)
+        except (ValueError, TypeError):
+            return (None, f"not_date:{s_parse!r}") if on_error == "null" else (None, f"not_date:{s_parse!r}")
+
+    if to_type == "datetime":
+        s_parse = s.strip() if trim else s
+        s_parse = s_parse.strip()
+        if not s_parse:
+            return (None, "empty") if on_error == "null" else (None, "empty")
+        try:
+            dt = datetime.fromisoformat(s_parse.replace("Z", "+00:00"))
+            return (dt.isoformat(), None)
+        except (ValueError, TypeError):
+            return (None, f"not_datetime:{s_parse!r}") if on_error == "null" else (None, f"not_datetime:{s_parse!r}")
+
+    return (None, f"unknown_type:{to_type}")
+
+
+def _execute_cast(
+    step: OpStep,
+    tables: Dict[str, List[Dict[str, Any]]],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Execute cast step. Returns (output_rows, evidence_dict with cast_failures, nulled)."""
+    params = step.params or {}
+    casts = params.get("casts") or []
+    input_table = step.inputs[0]
+    input_rows = tables.get(input_table, [])
+
+    cast_failures = 0
+    nulled = 0
+    output_rows: List[Dict[str, Any]] = []
+
+    for row in input_rows:
+        new_row = dict(row)
+        for c in casts:
+            col = c.get("col", "")
+            to_type = c.get("to", "str")
+            on_error = c.get("on_error", "fail")
+            trim = c.get("trim", False)
+            val = row.get(col)
+            out_val, err = _cast_value(val, to_type, on_error, trim)
+            if err is not None:
+                if on_error == "fail":
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_CAST_FAILED",
+                        f"Cast {col} -> {to_type} failed: {err}",
+                        _loc_to_dict(step.loc),
+                    )
+                cast_failures += 1
+                nulled += 1
+                new_row[col] = None
+            else:
+                if out_val is None and val is not None:
+                    nulled += 1
+                new_row[col] = out_val
+        output_rows.append(new_row)
+
+    evidence = {"cast_failures": cast_failures, "nulled": nulled}
+    return output_rows, evidence
+
+
 def _execute_aggregate(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     params = step.params or {}
     group_by = params.get("group_by") or []
@@ -1160,19 +1276,74 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                 )
 
             op = step.op
-            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose", "sql_select", "format", "aggregate", "summary", "save", "assert", "let_scalar", "const"}:
+            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "cast", "datasource", "data_step", "transpose", "sql_select", "format", "aggregate", "summary", "save", "assert", "let_scalar", "const"}:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
                     f"Unsupported operation '{op}'",
                     _loc_to_dict(step.loc),
                 )
 
-            if not step.inputs and op not in ("format", "assert", "let_scalar", "const"):
+            if not step.inputs and op not in ("format", "assert", "let_scalar", "const", "datasource"):
                 raise RuntimeFailure(
                     "SANS_RUNTIME_TABLE_UNDEFINED",
                     f"Operation '{op}' has no input table.",
                     _loc_to_dict(step.loc),
                 )
+            if op == "datasource":
+                params = step.params or {}
+                kind = params.get("kind", "csv")
+                out_name = step.outputs[0] if step.outputs else None
+                if not out_name:
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_DATASOURCE_NO_OUTPUT",
+                        "Datasource step has no output.",
+                        _loc_to_dict(step.loc),
+                    )
+                if kind == "inline_csv":
+                    inline_text = params.get("inline_text") or ""
+                    from io import StringIO
+                    buf = StringIO(inline_text.strip())
+                    reader = csv.reader(buf)
+                    try:
+                        headers = next(reader)
+                    except StopIteration:
+                        headers = []
+                    rows_d: List[Dict[str, Any]] = []
+                    for row in reader:
+                        if not row:
+                            continue
+                        row_dict = {}
+                        for i, col in enumerate(headers):
+                            row_dict[col] = _parse_value(row[i]) if i < len(row) else None
+                        rows_d.append(row_dict)
+                    tables[out_name] = rows_d
+                else:
+                    path_str = params.get("path") or ""
+                    if not path_str:
+                        raise RuntimeFailure(
+                            "SANS_RUNTIME_DATASOURCE_NO_PATH",
+                            "Datasource step (non-inline) requires path.",
+                            _loc_to_dict(step.loc),
+                        )
+                    path = Path(path_str)
+                    if not path.exists():
+                        raise RuntimeFailure(
+                            "SANS_RUNTIME_INPUT_NOT_FOUND",
+                            f"Datasource file not found: {path_str}",
+                            _loc_to_dict(step.loc),
+                        )
+                    tables[out_name] = _load_csv(path)
+                t_id = compute_transform_id(op, step.params)
+                step_evidence.append({
+                    "step_index": step_idx,
+                    "step_id": compute_step_id(t_id, step.inputs, step.outputs),
+                    "transform_id": t_id,
+                    "op": op,
+                    "inputs": list(step.inputs),
+                    "outputs": list(step.outputs),
+                    "row_counts": {out_name: len(tables[out_name])},
+                })
+                continue
             if step.inputs:
                 input_table = step.inputs[0]
                 if input_table not in tables:
@@ -1226,6 +1397,23 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                             new_key = rename_map.get(key, key)
                             new_row[new_key] = value
                         output_rows.append(new_row)
+                elif op == "cast":
+                    output_rows, cast_evidence = _execute_cast(step, tables)
+                    for output in step.outputs:
+                        tables[output] = output_rows
+                    t_id = compute_transform_id(op, step.params)
+                    step_evidence.append({
+                        "step_index": step_idx,
+                        "step_id": compute_step_id(t_id, step.inputs, step.outputs),
+                        "transform_id": t_id,
+                        "op": op,
+                        "inputs": list(step.inputs),
+                        "outputs": list(step.outputs),
+                        "row_counts": {t: len(output_rows) for t in step.outputs},
+                        "cast_failures": cast_evidence.get("cast_failures", 0),
+                        "nulled": cast_evidence.get("nulled", 0),
+                    })
+                    continue
                 elif op == "data_step":
                     step_outputs = _execute_data_step(step, tables, formats)
                     # step_outputs is Dict[str, List[Dict[str, Any]]]

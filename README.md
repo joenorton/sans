@@ -68,12 +68,13 @@ sans verify out/report.json
 
 The native DSL provides a clean, linear syntax for data pipelines. It is safer than SAS, with strict rules for column creation and overwrites.
 
-- **Additive by default**: Use `derive(col = expr)` to create new columns.
-- **Explicit Overwrites**: Use `update!(col = expr)` to modify existing columns.
+- **Additive by default**: Use `derive(col = expr)` to create new columns only (error if column exists).
+- **Explicit overwrites**: Use `update!(col = expr)` to modify existing columns only (error if missing).
 - **Explicit output**: Outputs are defined only via **save**; there is no implicit "last table wins."
-- **Stable Ties**: Sorting is stable; `nodupkey` preserves the first encountered row.
+- **Explicit cast**: Use `cast(col -> type [on_error=null] [trim=true], ...)` for deterministic type conversion; target types: `str`, `int`, `decimal`, `bool`, `date`, `datetime`. Evidence (cast_failures, nulled) is emitted in runtime.evidence.json.
+- **Stable ties**: Sorting is stable; `nodupkey` preserves the first encountered row.
 
-**expanded.sans** is the canonical human-readable form (fully explicit, no blocks, kernel vocabulary only); scripts are sugar that lower to the same IR.
+**expanded.sans** is the canonical human-readable form (fully explicit, no blocks, kernel vocabulary only); scripts are sugar that lower to the same IR. Compiling expanded.sans must reproduce the same plan.ir.json (byte-identical aside from quarantined metadata).
 
 ```sans
 # process.sans
@@ -83,10 +84,9 @@ datasource raw = csv("raw.csv")
 table enriched = from(raw) do
   derive(base_val = a + 1)
   filter(base_val > 0)
-  derive do
-    update! base_val = base_val * 10
-    risk = if(base_val > 100, "HIGH", "LOW")
-  end
+  update!(base_val = base_val * 10)
+  derive(risk = if(base_val > 100, "HIGH", "LOW"))
+  cast(base_val -> str)
 end
 
 enriched select subjid, base_val, risk
@@ -120,8 +120,8 @@ See [DETERMINISM.md](./DETERMINISM.md) for the sacred v1 invariants.
 
 ---
 
-## Deep References 
+## Deep References
 
-- **Specs**: [SUBSET_SPEC.md](./docs/SUBSET_SPEC.md) | [REPORT_CONTRACT.md](./docs/REPORT_CONTRACT.md)
+- **Specs**: [SUBSET_SPEC.md](./docs/SUBSET_SPEC.md) | [REPORT_CONTRACT.md](./docs/REPORT_CONTRACT.md) | [IR_CANONICAL_PARAMS.md](./docs/IR_CANONICAL_PARAMS.md)
 - **Internals**: [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | [IR_SPEC.md](./docs/IR_SPEC.md)
 - **Guidance**: [ERROR_CODES.md](./docs/ERROR_CODES.md) | [BIG_PIC.md](./docs/BIG_PIC.md)

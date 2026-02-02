@@ -204,6 +204,71 @@ def normalize_rename_mapping(raw: Any, loc: Loc) -> List[Dict[str, Any]]:
 # -----------------------------------------------------------------------------
 AGGREGATE_ALLOWED_OPS = frozenset({"mean", "sum", "min", "max", "count", "n"})
 
+# -----------------------------------------------------------------------------
+# Cast canonical: params["casts"] = list[{"col": str, "to": str, "on_error": "fail"|"null", "trim": bool}]
+# -----------------------------------------------------------------------------
+CAST_ALLOWED_TYPES = frozenset({"str", "int", "decimal", "bool", "date", "datetime"})
+
+
+def normalize_cast_params(params: Dict[str, Any], loc: Loc) -> None:
+    """
+    Normalize cast params in place to canonical:
+    - params["casts"] = list[{"col": str, "to": str, "on_error": "fail"|"null", "trim": bool}]
+    Rejects empty casts; validates "to" against CAST_ALLOWED_TYPES.
+    Defaults: on_error="fail", trim=False.
+    """
+    raw = params.get("casts")
+    if not isinstance(raw, list) or len(raw) == 0:
+        raise UnknownBlockStep(
+            code="SANS_VALIDATE_CAST_MISSING_CASTS",
+            message="Cast operation requires non-empty 'casts' list.",
+            loc=loc,
+        )
+    result: List[Dict[str, Any]] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise UnknownBlockStep(
+                code="SANS_VALIDATE_CAST_ENTRY_INVALID",
+                message=f"Cast entry must be {{col, to, on_error?, trim?}}, got {type(item).__name__}.",
+                loc=loc,
+            )
+        col = item.get("col")
+        if col is None or (isinstance(col, str) and not col.strip()):
+            raise UnknownBlockStep(
+                code="SANS_VALIDATE_CAST_EMPTY_COL",
+                message="Cast entry missing or empty 'col'.",
+                loc=loc,
+            )
+        col = col.strip() if isinstance(col, str) else str(col)
+        to = item.get("to")
+        if to is None or (isinstance(to, str) and not to.strip()):
+            raise UnknownBlockStep(
+                code="SANS_VALIDATE_CAST_EMPTY_TO",
+                message="Cast entry missing or empty 'to' (target type).",
+                loc=loc,
+            )
+        to = (to.strip() if isinstance(to, str) else str(to)).lower()
+        if to not in CAST_ALLOWED_TYPES:
+            raise UnknownBlockStep(
+                code="SANS_VALIDATE_CAST_INVALID_TYPE",
+                message=f"Cast target type must be one of {sorted(CAST_ALLOWED_TYPES)}, got '{to}'.",
+                loc=loc,
+            )
+        on_error = item.get("on_error", "fail")
+        if isinstance(on_error, str):
+            on_error = on_error.strip().lower()
+        if on_error not in ("fail", "null"):
+            raise UnknownBlockStep(
+                code="SANS_VALIDATE_CAST_ON_ERROR_INVALID",
+                message="Cast on_error must be 'fail' or 'null'.",
+                loc=loc,
+            )
+        trim = item.get("trim", False)
+        if not isinstance(trim, bool):
+            trim = str(trim).strip().lower() in ("true", "1", "yes")
+        result.append({"col": col, "to": to, "on_error": on_error, "trim": bool(trim)})
+    params["casts"] = result
+
 
 def normalize_aggregate_params(params: Dict[str, Any], loc: Loc) -> None:
     """
@@ -420,6 +485,8 @@ class IRDoc:
                     step.params.pop("map", None)
                 elif step.op == "aggregate":
                     normalize_aggregate_params(step.params, step.loc)
+                elif step.op == "cast":
+                    normalize_cast_params(step.params, step.loc)
 
                 # Determine sortedness for output tables based on the operation.
                 # Choose the first *real table* input as the sortedness reference.
@@ -530,6 +597,10 @@ class IRDoc:
 
                 elif step.op == "identity":
                     # identity preserves sortedness
+                    output_sorted_by = input_sorted_by
+
+                elif step.op == "cast":
+                    # cast preserves order (doesn't change row order)
                     output_sorted_by = input_sorted_by
 
                 # --- Add/Update output table facts ---

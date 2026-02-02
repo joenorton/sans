@@ -15,6 +15,7 @@
 | sort | `by` = list[{col: str, desc: bool}] | ✅ | list[str] or list[{col, asc}]; in validate() |
 | aggregate | `group_by` = list[str], `metrics` = list[{name, op, col}] | ✅ | class, var/vars, stats, autoname, naming; in validate() |
 | identity | (none or empty) | n/a | — |
+| cast | `casts` = list[{col: str, to: str, on_error: "fail"\|"null", trim: bool}] | ✅ | in validate(); to ∈ {str, int, decimal, bool, date, datetime} |
 | save | (output binding / path) | n/a | — |
 | assert | (predicate / table) | n/a | — |
 | let_scalar | (name, expr) | n/a | — |
