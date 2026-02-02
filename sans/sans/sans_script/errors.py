@@ -4,7 +4,9 @@ from dataclasses import dataclass
 
 
 def _normalize_code(code: str) -> str:
-    return code if code.startswith("E_") else f"E_{code}"
+    if code.startswith("E_") or code.startswith("W_"):
+        return code
+    return f"E_{code}"
 
 
 @dataclass

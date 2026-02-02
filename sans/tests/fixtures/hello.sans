@@ -1,22 +1,15 @@
-sans 1.0
+# sans 0.1
 
-format $sev do
-  "MILD" -> "1"
-  "MODERATE" -> "2"
-  other -> ""
+datasource in = inline_csv do
+  a,b
+  6,7
+  3,2
 end
 
-data lb_named do
-  from lb do
-    keep(subjid, lbdtc, lbtestcd, lbstresn)
-  end
+table t = from(in) do
+  derive(base2 = a * 2)
+  filter(base2 > 10)
+  select a, base2
 end
 
-sort lb_named -> lb_sorted by subjid lbdtc nodupkey true
-
-summary lb_sorted -> lb_summary do
-  class subjid
-  var lbstresn
-end
-
-select lb_summary -> lb_final keep(subjid, lbstresn_mean)
+t select a, base2

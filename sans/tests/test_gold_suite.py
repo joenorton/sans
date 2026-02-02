@@ -178,7 +178,7 @@ def test_gold_missing_arithmetic(tmp_path):
     ]
 
 
-def test_gold_sort_nodupkey_last_wins(tmp_path):
+def test_gold_sort_nodupkey_first_wins(tmp_path):
     inp = tmp_path / "in.csv"
     _write_csv(inp, [["id", "val"], ["2", "A"], ["2", "B"], ["1", "X"]])
 
@@ -203,7 +203,7 @@ def test_gold_sort_nodupkey_last_wins(tmp_path):
     assert rows == [
         ["id", "val"],
         ["1", "X"],
-        ["2", "B"],
+        ["2", "A"],
     ]
 
 

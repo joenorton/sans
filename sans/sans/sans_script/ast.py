@@ -1,9 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-
-from sans.expr import ExprNode
+from typing import Any, Dict, List, Optional, Union
 
 
 @dataclass
@@ -13,95 +11,97 @@ class SourceSpan:
 
 
 @dataclass
-class FormatEntry:
-    key: str
-    value: str
-    is_other: bool
+class MapEntry:
+    key: Optional[str]  # None for '_'
+    value: Any # Should be ExprNode for map values, not Any
+    span: SourceSpan
 
 
 @dataclass
-class FormatStmt:
+class MapExpr:
+    entries: List[MapEntry]
+    span: SourceSpan
+
+
+@dataclass
+class LetBinding:
     name: str
-    entries: List[FormatEntry]
+    expr: Union[ExprNode, MapExpr]
     span: SourceSpan
 
 
 @dataclass
-class AssignmentStmt:
-    target: str
-    expr: ExprNode
+class TableTransform:
+    kind: str  # 'select', 'filter', 'derive', 'rename', 'drop'
+    params: Dict[str, Any]
     span: SourceSpan
 
 
 @dataclass
-class FilterStmt:
-    predicate: ExprNode
-    span: SourceSpan
+class TableExpr:
+    pass
 
 
 @dataclass
-class RenameStmt:
-    mappings: Dict[str, str]
-    span: SourceSpan
-
-
-@dataclass
-class KeepStmt:
-    columns: List[str]
-    span: SourceSpan
-
-
-@dataclass
-class DropStmt:
-    columns: List[str]
-    span: SourceSpan
-
-
-@dataclass
-class DataStmt:
-    output: str
-    table: str
-    input_keep: List[str]
-    input_drop: List[str]
-    input_rename: Dict[str, str]
-    input_where: ExprNode | None
-    statements: List[Dict[str, Any]]
-    keep: KeepStmt | None
-    drop: DropStmt | None
-    span: SourceSpan
-
-
-@dataclass
-class SortStmt:
+class FromExpr(TableExpr):
     source: str
-    target: str
-    by: List[str]
-    nodupkey: bool
     span: SourceSpan
 
 
 @dataclass
-class SummaryStmt:
-    source: str
-    target: str
-    class_keys: List[str]
-    vars: List[str]
+class TableNameExpr(TableExpr):
+    name: str
     span: SourceSpan
 
 
 @dataclass
-class SelectStmt:
-    source: str
-    target: str
-    keep: List[str]
-    drop: List[str]
+class PipelineExpr(TableExpr):
+    source: TableExpr
+    steps: List[TableTransform]
     span: SourceSpan
 
 
-SansScriptStmt = FormatStmt | DataStmt | SortStmt | SummaryStmt | SelectStmt
+@dataclass
+class PostfixExpr(TableExpr):
+    source: TableExpr
+    transform: TableTransform
+    span: SourceSpan
+
+
+@dataclass
+class BuilderExpr(TableExpr):
+    kind: str  # 'sort', 'summary'
+    source: TableExpr
+    config: Dict[str, Any]
+    span: SourceSpan
+
+
+@dataclass
+class TableBinding:
+    name: str
+    expr: TableExpr
+    span: SourceSpan
+
+@dataclass
+class DatasourceDeclaration:
+    name: str
+    # discriminator
+    kind: str                 # "csv" | "inline_csv"
+    span: SourceSpan
+    # csv-backed
+    path: Optional[str] = None
+    # shared / optional
+    columns: Optional[List[str]] = None
+    # inline_csv-backed
+    inline_text: Optional[str] = None        # normalized CSV text
+    inline_sha256: Optional[str] = None      # hash of normalized text
+
+SansScriptStmt = Union[LetBinding, TableBinding, DatasourceDeclaration]
 
 
 @dataclass
 class SansScript:
     statements: List[SansScriptStmt]
+    terminal_expr: Optional[TableExpr]
     span: SourceSpan
+    datasources: Dict[str, DatasourceDeclaration]

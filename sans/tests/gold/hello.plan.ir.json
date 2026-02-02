@@ -7,59 +7,121 @@
         "line_start": 3,
         "line_end": 7
       },
-      "op": "format",
+      "op": "datasource",
       "inputs": [],
       "outputs": [
-        "__format__$sev"
+        "__datasource__in"
       ],
       "params": {
-        "name": "$sev",
-        "map": {
-          "MILD": "1",
-          "MODERATE": "2"
-        },
-        "other": ""
+        "name": "in",
+        "path": null,
+        "columns": [],
+        "kind": "csv"
       },
-      "step_id": "b69bee5e4ea52bcb61aaf468e5ddc67b4983b51a5780951c633fe211b8903f16"
+      "transform_id": "a7acaaaa90bb910be48824ce74ac80e4918a38bc4897f312cfcc4ea72addbc5c",
+      "step_id": "df56cee2588435b124f5a215e19e3363f906597b2a08c9edeff8bd1627d0b016"
     },
     {
       "kind": "op",
       "loc": {
         "file": "sans/tests/fixtures/hello.sans",
-        "line_start": 9,
-        "line_end": 13
+        "line_start": 10,
+        "line_end": 10
       },
       "op": "data_step",
       "inputs": [
-        "lb"
+        "__datasource__in"
       ],
       "outputs": [
-        "lb_named"
+        "__t2__"
       ],
       "params": {
         "mode": "set",
         "inputs": [
           {
-            "table": "lb",
-            "keep": [
-              "ubjid",
-              "lbdtc",
-              "lbte",
-              "tcd",
-              "lb",
-              "tre",
-              "n"
-            ]
+            "table": "__datasource__in"
           }
         ],
-        "by": [],
-        "retain": [],
+        "statements": [
+          {
+            "type": "assign",
+            "target": "base2",
+            "expr": {
+              "type": "binop",
+              "op": "*",
+              "left": {
+                "type": "col",
+                "name": "a"
+              },
+              "right": {
+                "type": "lit",
+                "value": 2
+              }
+            },
+            "allow_overwrite": false
+          }
+        ],
         "keep": [],
         "drop": [],
-        "statements": [],
         "explicit_output": false
       },
-      "step_id": "da2a010d54e4ccc3c72adad70eb50b2511e282ea8cf82dbdf54f4a6ac76be3f2"
+      "transform_id": "d117c05092e984b0ca9989117c370391153bdb04e86796d1c7be910b6e9e2dc7",
+      "step_id": "739ba17f402b5695e8c76dab8f64d3e388a121ee8ee4552a101f55790beb580b"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 11,
+        "line_end": 11
+      },
+      "op": "filter",
+      "inputs": [
+        "__t2__"
+      ],
+      "outputs": [
+        "__t3__"
+      ],
+      "params": {
+        "predicate": {
+          "type": "binop",
+          "op": ">",
+          "left": {
+            "type": "col",
+            "name": "base2"
+          },
+          "right": {
+            "type": "lit",
+            "value": 10
+          }
+        }
+      },
+      "transform_id": "b332ccef4c9e10f3a82dfd0e51f3e1f7338e17b73ecbb4006b41483b03798458",
+      "step_id": "d65c72b0a87f7a42746eec49deb1712cc59998ce8ecdcc6847d883446b1d172b"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 12,
+        "line_end": 12
+      },
+      "op": "select",
+      "inputs": [
+        "__t3__"
+      ],
+      "outputs": [
+        "t"
+      ],
+      "params": {
+        "keep": [
+          "a",
+          "base2"
+        ],
+        "drop": []
+      },
+      "transform_id": "1d179f60a615b95f9d77153db1c0dbc0f33569c078246007ccaf27d5532466b4",
+      "step_id": "dc5b26fc3ccaefdb80ed4ddfd659a448572111c557d48da566d6603062583643"
     },
     {
       "kind": "op",
@@ -68,72 +130,22 @@
         "line_start": 15,
         "line_end": 15
       },
-      "op": "sort",
-      "inputs": [
-        "lb_named"
-      ],
-      "outputs": [
-        "lb_sorted"
-      ],
-      "params": {
-        "by": [
-          "subjid",
-          "lbdtc"
-        ],
-        "nodupkey": true
-      },
-      "step_id": "dd6429d1cb28f4c5855fd1cbb1539ba7ccbf95e3413b2dfce6d32b3f7e4c0d48"
-    },
-    {
-      "kind": "op",
-      "loc": {
-        "file": "sans/tests/fixtures/hello.sans",
-        "line_start": 17,
-        "line_end": 20
-      },
-      "op": "summary",
-      "inputs": [
-        "lb_sorted"
-      ],
-      "outputs": [
-        "lb_summary"
-      ],
-      "params": {
-        "class": [
-          "subjid"
-        ],
-        "vars": [
-          "lbstresn"
-        ],
-        "stat": "mean",
-        "autoname": true
-      },
-      "step_id": "5793d2d181b106f3264ce2adbad41daed1a0dfa20259775a6850f02dde6b255c"
-    },
-    {
-      "kind": "op",
-      "loc": {
-        "file": "sans/tests/fixtures/hello.sans",
-        "line_start": 22,
-        "line_end": 22
-      },
       "op": "select",
       "inputs": [
-        "lb_summary"
+        "t"
       ],
       "outputs": [
-        "lb_final"
+        "__result__"
       ],
       "params": {
         "keep": [
-          "ubjid",
-          "lb",
-          "tre",
-          "n_mean"
+          "a",
+          "base2"
         ],
         "drop": []
       },
-      "step_id": "ee503ea704d60896d51cbbbbed21f3bc6105a690c5063bdcff6dbb746a717b0f"
+      "transform_id": "1d179f60a615b95f9d77153db1c0dbc0f33569c078246007ccaf27d5532466b4",
+      "step_id": "48df123c0438a86f76705980006195ee1e946f191db420d12701f17b71d8d07d"
     }
   ],
   "tables": [
@@ -143,25 +155,23 @@
     "lb": {
       "sorted_by": null
     },
-    "__format__$sev": {
+    "__t2__": {
       "sorted_by": null
     },
-    "lb_named": {
+    "__t3__": {
       "sorted_by": null
     },
-    "lb_sorted": {
-      "sorted_by": [
-        "subjid",
-        "lbdtc"
-      ]
-    },
-    "lb_summary": {
-      "sorted_by": [
-        "subjid"
-      ]
-    },
-    "lb_final": {
+    "t": {
       "sorted_by": null
+    },
+    "__result__": {
+      "sorted_by": null
+    }
+  },
+  "datasources": {
+    "in": {
+      "path": null,
+      "columns": []
     }
   }
 }

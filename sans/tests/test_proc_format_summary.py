@@ -189,7 +189,7 @@ def test_proc_summary_mean(tmp_path: Path):
     ]
 
 
-def test_proc_sort_nodupkey_last_wins(tmp_path: Path):
+def test_proc_sort_nodupkey_first_wins(tmp_path: Path):
     in_csv = tmp_path / "in.csv"
     _write_csv(
         in_csv,
@@ -223,7 +223,7 @@ def test_proc_sort_nodupkey_last_wins(tmp_path: Path):
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "val"]
     assert rows[1:] == [
-        ["1", "B"],
+        ["1", "A"],
         ["2", "C"],
     ]
 

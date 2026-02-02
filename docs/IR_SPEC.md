@@ -67,7 +67,7 @@ SQL select op (subset)
 
 Determinism rules (v0.1)
 - `sort` is stable; null ordering is explicit in runtime settings.
-- `sort` may apply `nodupkey` with last-wins after sorting by keys.
+- `sort` may apply `nodupkey` with first-wins after sorting by keys.
 - Group output ordering (if/when added) must be explicit.
 
 Format op (minimal subset)

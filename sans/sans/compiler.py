@@ -17,6 +17,7 @@ from .recognizer import (
     recognize_proc_summary_block,
 )
 from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
+from .sans_script.ast import DatasourceDeclaration # New import
 from . import __version__ as _engine_version
 
 
@@ -58,6 +59,10 @@ def _irdoc_to_dict(doc: IRDoc) -> Dict[str, Any]:
             name: {"sorted_by": fact.sorted_by}
             for name, fact in doc.table_facts.items()
         },
+        "datasources": {
+            name: {"path": ds.path, "columns": ds.columns}
+            for name, ds in doc.datasources.items()
+        }
     }
 
 def _error_to_dict(err: UnknownBlockStep) -> Dict[str, Any]:
@@ -242,7 +247,18 @@ def compile_sans_script(
     """
     try:
         script = parse_sans_script(text, file_name)
+        from .sans_script.validate import validate_script
+        warnings = validate_script(script, tables or set())
         steps, references = lower_script(script, file_name)
+        
+        # Add warnings as UnknownBlockSteps with warning severity
+        for w in warnings:
+            steps.append(UnknownBlockStep(
+                code=w["code"],
+                message=w["message"],
+                loc=Loc(file_name, w["line"], w["line"]),
+                severity="warning"
+            ))
     except SansScriptError as err:
         table_set = set(tables) if tables else set()
         tf_objects: Dict[str, TableFact] = {}
@@ -267,7 +283,35 @@ def compile_sans_script(
             tf_objects[table_name] = TableFact(**facts_dict)
     table_set = set(tables) if tables else set()
     table_set.update(references)
-    return IRDoc(steps=steps, tables=table_set, table_facts=tf_objects)
+    
+    from sans.ir import DatasourceDecl
+
+    ir_datasources: dict[str, DatasourceDecl] = {}
+    for ast_ds in script.datasources.values():
+        if ast_ds.kind == "csv":
+            ir_ds = DatasourceDecl(
+                kind="csv",
+                path=ast_ds.path,
+                columns=ast_ds.columns,
+            )
+        elif ast_ds.kind == "inline_csv":
+            ir_ds = DatasourceDecl(
+                kind="inline_csv",
+                columns=ast_ds.columns,
+                inline_text=ast_ds.inline_text,
+                inline_sha256=ast_ds.inline_sha256,
+            )
+        else:
+            raise AssertionError(f"Unknown datasource kind: {ast_ds.kind}")
+
+        ir_datasources[ast_ds.name] = ir_ds
+
+    return IRDoc(
+        steps=steps,
+        tables=table_set,
+        table_facts=tf_objects,
+        datasources=ir_datasources,
+    )
 
 def check_script(
     text: str,
@@ -358,7 +402,12 @@ def emit_check_artifacts(
         validate_start = perf_counter()
         try:
             validated_table_facts = irdoc.validate()
-            irdoc = IRDoc(steps=irdoc.steps, tables=irdoc.tables, table_facts=validated_table_facts)
+            irdoc = IRDoc(
+                steps=irdoc.steps,
+                tables=irdoc.tables,
+                table_facts=validated_table_facts,
+                datasources=irdoc.datasources,
+            )
         except UnknownBlockStep as err:
             validation_error = err
         validate_ms = int((perf_counter() - validate_start) * 1000)
@@ -371,8 +420,15 @@ def emit_check_artifacts(
                 steps=op_steps,
                 tables=irdoc.tables,
                 table_facts=irdoc.table_facts,
+                datasources=irdoc.datasources,
             ).validate()
-            irdoc = IRDoc(steps=irdoc.steps, tables=irdoc.tables, table_facts=validated_table_facts)
+            irdoc = IRDoc(
+                steps=irdoc.steps,
+                tables=irdoc.tables,
+                table_facts=validated_table_facts,
+                datasources=irdoc.datasources,
+            )
+
         except UnknownBlockStep as err:
             validation_error = err
         validate_ms = int((perf_counter() - validate_start) * 1000)
@@ -418,6 +474,7 @@ def emit_check_artifacts(
             "allow_approx": allow_approx,
             "tolerance": tolerance,
             "tables": sorted(list(tables)) if tables else [],
+            "datasources": sorted(list(irdoc.datasources.keys())),
         },
         "timing": {
             "compile_ms": compile_ms,

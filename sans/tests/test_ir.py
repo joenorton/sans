@@ -45,6 +45,7 @@ def test_irdoc_serialization():
         ],
         "tables": set(),
         "table_facts": {},
+        "datasources": {},
     }
 
     # Assert that the serialized IRDoc matches the expected structure

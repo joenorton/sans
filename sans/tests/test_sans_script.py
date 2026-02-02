@@ -1,4 +1,4 @@
-﻿import json
+import json
 from pathlib import Path
 
 from sans.compiler import _irdoc_to_dict, compile_sans_script, UnknownBlockStep
@@ -11,8 +11,18 @@ PLAN = Path("sans/tests/gold/hello.plan.ir.json")
 
 def _compile_script(text: str) -> dict:
     irdoc = compile_sans_script(text, "sans/tests/fixtures/hello.sans", tables={"lb"})
-    validated = IRDoc(steps=irdoc.steps, tables=irdoc.tables, table_facts=irdoc.table_facts).validate()
-    irdoc = IRDoc(steps=irdoc.steps, tables=irdoc.tables, table_facts=validated)
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
     return _irdoc_to_dict(irdoc)
 
 
@@ -44,61 +54,72 @@ def test_sans_script_deterministic_plan():
 
 
 def test_missing_header_refused():
-    script = "data foo do\n  from bar\nend\n"
+    script = "table foo = from(bar)\n"
     _assert_block_error(script, "E_MISSING_HEADER")
 
 
 def test_malformed_end_refused():
-    script = "sans 1.0\ndata foo do\n  from bar\n"
+    script = "# sans 0.1\ntable foo = from(bar) do\n  select a\n"
     _assert_block_error(script, "E_PARSE")
 
 
 def test_unknown_clause_refused():
     script = (
-        "sans 1.0\n"
-        "data foo do\n"
-        "  from bar do\n"
-        "  end\n"
+        "# sans 0.1\n"
+        "datasource bar = inline_csv do\n"
+        "  a,b\n"
+        "  6,7\n"
+        "  3,2\n"
+        "end\n"
+        "table foo = from(bar) do\n"
         "  mystery\n"
         "end\n"
     )
-    _assert_block_error(script, "E_UNKNOWN_STMT")
+    _assert_block_error(script, "E_PARSE")
 
 
 def test_invalid_expression_refused():
     script = (
-        "sans 1.0\n"
-        "data foo do\n"
-        "  from bar do\n"
-        "  end\n"
+        "# sans 0.1\n"
+        "datasource bar = inline_csv do\n"
+        "  a,b\n"
+        "  6,7\n"
+        "  3,2\n"
+        "end\n"
+        "table foo = from(bar) do\n"
         "  filter (a > )\n"
         "end\n"
     )
     _assert_block_error(script, "E_BAD_EXPR")
 
 
-def test_case_missing_else_refused():
-    script = """\nsans 1.0\ndata foo do\n  from bar do\n  end\n  case cat\n    when \"A\"\n  end\nend\n"""
-    _assert_block_error(script, "E_PARSE")
-
-
 def test_single_equals_refused():
     script = (
-        "sans 1.0\n"
-        "data foo do\n"
-        "  from bar do\n"
-        "  end\n"
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  6,7\n"
+        "  3,2\n"
+        "end\n"
+        "table foo = from(bar) do\n"
         "  filter a = 1\n"
         "end\n"
     )
     _assert_block_error(script, "E_BAD_EXPR")
 
-
 def test_sort_missing_by_refused():
-    script = "sans 1.0\nsort bar -> baz\n"
-    _assert_block_error(script, "E_PARSE")
-
-
-def test_data_missing_set_refused():
-    script = "sans 1.0\ndata foo do\n  keep(a)\nend\n"
-    _assert_block_error(script, "E_BAD_SET")
+    script = (
+        "# sans 0.1\n"
+        "datasource bar = inline_csv do\n"
+        "  a,b\n"
+        "  6,7\n"
+        "  3,2\n"
+        "end\n"
+    "table baz = sort(bar)\n"
+    )
+    irdoc = compile_sans_script(script, "script.sans", tables={"bar"})
+    try:
+        irdoc.validate()
+        assert False, "Should have failed validation"
+    except UnknownBlockStep as err:
+        assert err.code == "E_SANS_VALIDATE_SORT_MISSING_BY"

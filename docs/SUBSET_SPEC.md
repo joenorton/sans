@@ -177,7 +177,7 @@ run;
 Semantics:
 
 * Stable sort
-* `nodupkey`: remove duplicates by BY keys, keep **last** row
+* `nodupkey`: remove duplicates by BY keys, keep **first** row encountered in input order
 * Explicit tie-breaking policy is enforced
 
 ---
@@ -483,7 +483,7 @@ For `report.json` self-verification, the hash is compared against the content of
 | `retain` | Yes | |
 | `first.`, `last.` | Yes | |
 | **Procedures** | | |
-| `PROC SORT` | Yes | `nodupkey` supported (last wins). Stable sort. |
+| `PROC SORT` | Yes | `nodupkey` supported (first wins). Stable sort. |
 | `PROC SQL` | Limited | Inner/Left Join, Aggregates. No subqueries. |
 | `PROC TRANSPOSE` | Yes | `id`, `var` required. |
 | `PROC SUMMARY` | Yes | `nway` implied. |

@@ -70,7 +70,7 @@ Proc sort pattern (v0.1)
 - Exactly one `by` statement in the body.
 - Any other body statement is refused.
 - Missing `by` is a parse refusal (`SANS_PARSE_SORT_MISSING_BY`).
-- `nodupkey` keeps the last row per BY key after stable sort.
+- `nodupkey` keeps the first row per BY key after stable sort (preserving input order for ties).
 
 Proc transpose pattern (v0.1)
 - Header requires `data=` and `out=`; any other header option is refused.

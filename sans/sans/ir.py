@@ -4,10 +4,37 @@ from typing import Any, Optional, List, Dict
 
 from ._loc import Loc
 
+
+# -----------------------------------------------------------------------------
+# Datasource pseudo-table helpers
+# -----------------------------------------------------------------------------
+DATASOURCE_PREFIX = "__datasource__"
+
+
+def ds_input(name: str) -> str:
+    return f"{DATASOURCE_PREFIX}{name}"
+
+
+def is_ds_input(s: str) -> bool:
+    return s.startswith(DATASOURCE_PREFIX)
+
+
+def ds_name_from_input(s: str) -> str:
+    return s[len(DATASOURCE_PREFIX):]
+
+@dataclass(frozen=True)
+class DatasourceDecl:
+    kind: str                 # "csv" | "inline_csv"
+    path: Optional[str] = None
+    columns: Optional[list[str]] = None
+    inline_text: Optional[str] = None   # normalized csv text for inline_csv
+    inline_sha256: Optional[str] = None
+
 @dataclass
 class TableFact:
     """Stores metadata about a table."""
-    sorted_by: Optional[List[str]] = None # List of column names by which the table is sorted
+    sorted_by: Optional[List[str]] = None  # List of column names by which the table is sorted
+
 
 @dataclass
 class Step:
@@ -15,6 +42,7 @@ class Step:
     # Use OpStep or UnknownBlockStep.
     kind: str
     loc: Loc
+
 
 @dataclass
 class OpStep(Step):
@@ -24,26 +52,28 @@ class OpStep(Step):
     outputs: list[str] = field(default_factory=list)
     params: dict[str, Any] = field(default_factory=dict)
 
-@dataclass 
-class UnknownBlockStep(Step, Exception): # Inherit from both Step and Exception
+
+@dataclass
+class UnknownBlockStep(Step, Exception):  # Inherit from both Step and Exception
     kind: str = field(default="block", init=False)
     code: str
     message: str
-    severity: str = field(default="fatal") # Currently always fatal for blocks
+    severity: str = field(default="fatal")  # Currently always fatal for blocks
+
 
 @dataclass(frozen=True)
 class IRDoc:
     steps: list[Step] = field(default_factory=list)
-    tables: set[str] = field(default_factory=set) # Pre-declared tables
+    tables: set[str] = field(default_factory=set)  # Pre-declared tables
     table_facts: Dict[str, TableFact] = field(default_factory=dict)
+    datasources: Dict[str, DatasourceDecl] = field(default_factory=dict)  # Declared datasources
 
     def __post_init__(self):
         # Initialize table_facts for any pre-declared tables
         for table_name in self.tables:
             if table_name not in self.table_facts:
                 # Need to bypass frozen=True for modification in __post_init__
-                object.__setattr__(self, 'table_facts', {**self.table_facts, table_name: TableFact()})
-
+                object.__setattr__(self, "table_facts", {**self.table_facts, table_name: TableFact()})
 
     def validate(self) -> Dict[str, TableFact]:
         """
@@ -54,6 +84,7 @@ class IRDoc:
         """
         # Create a mutable copy of table_facts for validation
         current_table_facts: Dict[str, TableFact] = {k: TableFact(v.sorted_by) for k, v in self.table_facts.items()}
+
         # Ensure all initial tables from self.tables are in current_table_facts
         for table_name in self.tables:
             if table_name not in current_table_facts:
@@ -61,20 +92,33 @@ class IRDoc:
 
         for step in self.steps:
             if isinstance(step, UnknownBlockStep):
-                # If an unknown block step is already in the IR, it's a fatal error.
-                raise step
+                # If an unknown block step is already in the IR and it's fatal, it's an error.
+                if step.severity == "fatal":
+                    raise step
+                continue
 
             if isinstance(step, OpStep):
-                # --- Input Table Validation ---
+                # --- Input Validation ---
                 for input_table in step.inputs:
+                    if is_ds_input(input_table):
+                        ds_name = ds_name_from_input(input_table)
+                        if ds_name not in self.datasources:
+                            raise UnknownBlockStep(
+                                code="SANS_VALIDATE_DATASOURCE_UNDEFINED",
+                                message=f"Datasource '{ds_name}' used by operation '{step.op}' is not defined.",
+                                loc=step.loc,
+                            )
+                        # Datasource inputs don't exist as tables in current_table_facts
+                        continue
+
                     if input_table not in current_table_facts:
                         raise UnknownBlockStep(
                             code="SANS_VALIDATE_TABLE_UNDEFINED",
                             message=f"Input table '{input_table}' used by operation '{step.op}' is not defined.",
                             loc=step.loc,
                         )
-                
-                # --- Output Table Validation ---
+
+                # --- Output Validation ---
                 if not step.outputs:
                     # All OpSteps are expected to produce an output table.
                     # This implies an internal error in the compiler if outputs list is empty.
@@ -84,13 +128,17 @@ class IRDoc:
                         loc=step.loc,
                     )
 
-                # Determine sortedness for output tables based on the operation
-                # For now, we assume single input/output for simplicity in data steps and sort
+                # Determine sortedness for output tables based on the operation.
+                # Choose the first *real table* input as the sortedness reference.
                 input_sorted_by: Optional[List[str]] = None
-                if step.inputs and step.inputs[0] in current_table_facts:
-                    input_sorted_by = current_table_facts[step.inputs[0]].sorted_by
-                
-                output_sorted_by: Optional[List[str]] = None # Default to unsorted
+                for t in step.inputs:
+                    if is_ds_input(t):
+                        continue
+                    if t in current_table_facts:
+                        input_sorted_by = current_table_facts[t].sorted_by
+                        break
+
+                output_sorted_by: Optional[List[str]] = None  # Default to unsorted
 
                 if step.op == "sort":
                     # proc sort sets the sorted_by property
@@ -105,20 +153,24 @@ class IRDoc:
                         output_sorted_by = [v.get("col") for v in by_vars]
                     else:
                         output_sorted_by = list(by_vars)
-                
+
                 elif step.op == "data_step":
                     by_vars = step.params.get("by") or []
                     keep = step.params.get("keep") or []
                     if by_vars:
+                        # BY-group processing requires *table inputs* be sorted appropriately.
                         for input_table in step.inputs:
+                            if is_ds_input(input_table):
+                                continue
                             input_fact = current_table_facts.get(input_table)
-                            input_sorted_by = input_fact.sorted_by if input_fact else None
-                            if not input_sorted_by or input_sorted_by[:len(by_vars)] != by_vars:
+                            input_sorted = input_fact.sorted_by if input_fact else None
+                            if not input_sorted or input_sorted[: len(by_vars)] != by_vars:
                                 raise UnknownBlockStep(
                                     code="SANS_VALIDATE_ORDER_REQUIRED",
                                     message=f"Input table '{input_table}' must be sorted by {by_vars} for BY-group processing.",
                                     loc=step.loc,
                                 )
+                        # Keep/drop can destroy the BY keys -> conservatively drop sortedness.
                         if keep and not all(k in keep for k in by_vars):
                             output_sorted_by = None
                         else:
@@ -143,9 +195,11 @@ class IRDoc:
                             loc=step.loc,
                         )
                     for input_table in step.inputs:
+                        if is_ds_input(input_table):
+                            continue
                         input_fact = current_table_facts.get(input_table)
-                        input_sorted_by = input_fact.sorted_by if input_fact else None
-                        if not input_sorted_by or input_sorted_by[:len(by_vars)] != by_vars:
+                        input_sorted = input_fact.sorted_by if input_fact else None
+                        if not input_sorted or input_sorted[: len(by_vars)] != by_vars:
                             raise UnknownBlockStep(
                                 code="SANS_VALIDATE_ORDER_REQUIRED",
                                 message=f"Input table '{input_table}' must be sorted by {by_vars} for PROC TRANSPOSE.",
@@ -155,10 +209,7 @@ class IRDoc:
 
                 elif step.op == "sql_select":
                     group_by = step.params.get("group_by") or []
-                    if group_by:
-                        output_sorted_by = list(group_by)
-                    else:
-                        output_sorted_by = None
+                    output_sorted_by = list(group_by) if group_by else None
 
                 elif step.op == "summary":
                     class_vars = step.params.get("class") or []
@@ -180,7 +231,7 @@ class IRDoc:
                             output_sorted_by = None if any(k in drop for k in input_sorted_by) else input_sorted_by
                         else:
                             output_sorted_by = input_sorted_by
-                
+
                 elif step.op == "filter":
                     # filter preserves sortedness
                     output_sorted_by = input_sorted_by
@@ -191,15 +242,18 @@ class IRDoc:
 
                 elif step.op == "rename":
                     # rename drops sortedness unless we can map keys (conservative: drop)
-                    # TODO: Implement sophisticated mapping later if required.
-                    output_sorted_by = None # Renaming can change sort key names, so drop for now
-                
+                    output_sorted_by = None
+
                 elif step.op == "identity":
                     # identity preserves sortedness
                     output_sorted_by = input_sorted_by
 
-                # Add/Update output table facts
+                # --- Add/Update output table facts ---
                 for output_table in step.outputs:
+                    if is_ds_input(output_table):
+                        # Datasources are not tables and should not produce TableFact.
+                        continue
+
                     if output_table in current_table_facts:
                         raise UnknownBlockStep(
                             code="SANS_VALIDATE_OUTPUT_TABLE_COLLISION",
@@ -207,5 +261,5 @@ class IRDoc:
                             loc=step.loc,
                         )
                     current_table_facts[output_table] = TableFact(sorted_by=output_sorted_by)
-        
+
         return current_table_facts

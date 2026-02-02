@@ -1,29 +1,29 @@
-sans 1.0
+# sans 0.1
 
-format $grpfmt do
-  "HIGH" -> "High risk"
-  "LOW" -> "Low risk"
-  other -> ""
-end
+datasource in = csv("in.csv")
 
-data enriched do
-  from in do
-    rename(b -> base_b)
-    where (a + b >= 10)
+let grpfmt = map(
+  "HIGH" -> "High risk",
+  "LOW"  -> "Low risk",
+  _      -> ""
+)
+
+table enriched = from(in) do
+  rename(b -> base_b)
+  filter(a + base_b >= 10)
+  derive do
+    update! c = a * base_b
+    risk = if(c > 50, "HIGH", "LOW")
+    level = if(risk == "HIGH", 2, 1)
+    risk_label = grpfmt[risk]
   end
-
-  c = a * base_b
-  risk = if(c > 50, "HIGH", "LOW")
-  level = if(risk == "HIGH", 2, 1)
-  risk_label = put(risk, $grpfmt.)
-  keep(a, base_b, c, risk, level, risk_label)
+  select a, base_b, c, risk, level, risk_label
 end
 
-sort enriched -> enriched_s by risk level c nodupkey true
+table enriched_s = sort(enriched).by(risk, level, c).nodupkey(true)
 
-summary enriched_s -> stats do
-  class risk level
-  var c
-end
+table stats = summary(enriched_s)
+  .class(risk, level)
+  .var(c)
 
-select stats -> final keep(risk, level, c_mean)
+stats select risk, level, c_mean

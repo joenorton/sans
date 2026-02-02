@@ -1,27 +1,29 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from sans.expr import ExprNode
 from sans.parser_expr import parse_expression_from_string, tokenize
 
 from .ast import (
-    DataStmt,
-    DropStmt,
-    FormatEntry,
-    FormatStmt,
-    KeepStmt,
-    RenameStmt,
+    BuilderExpr,
+    FromExpr,
+    LetBinding,
+    MapEntry,
+    MapExpr,
+    PipelineExpr,
+    PostfixExpr,
     SansScript,
     SansScriptStmt,
-    SelectStmt,
-    SortStmt,
     SourceSpan,
-    SummaryStmt,
+    TableBinding,
+    TableExpr,
+    TableNameExpr,
+    TableTransform,
+    DatasourceDeclaration, # New import
 )
 from .errors import SansScriptError
-from .validate import ensure_true
 
 
 class _Line:
@@ -29,10 +31,30 @@ class _Line:
         self.text = text
         self.stripped = text.strip()
         self.number = number
+    
+    @property
+    def raw(self) -> str:
+        return self.text
 
+import re
+import hashlib
+
+def _sha256_text(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def _normalize_inline_csv(lines: list[str]) -> str:
+    # deterministic normalization: strip trailing whitespace, normalize newlines
+    cleaned = [ln.rstrip() for ln in lines]
+    # drop leading/trailing completely blank lines inside the block
+    while cleaned and cleaned[0].strip() == "":
+        cleaned.pop(0)
+    while cleaned and cleaned[-1].strip() == "":
+        cleaned.pop()
+    return "\n".join(cleaned) + ("\n" if cleaned else "")
 
 class SansScriptParser:
-    HEADER = "sans 1.0"
+    HEADER_MARKER = "# sans "
+    HEADER_VERSION = "0.1"
 
     def __init__(self, text: str) -> None:
         self._lines = [
@@ -44,593 +66,634 @@ class SansScriptParser:
 
     def parse(self, file_name: str) -> SansScript:
         self._file_name = file_name
-        header = self._next_content_line()
-        if not header or header.stripped.lower() != self.HEADER:
-            line_no = header.number if header else 1
+        # 1. Validate header
+        header_line = None
+        non_empty_seen = 0
+
+        for line in self._lines:
+            if not line.stripped:
+                continue
+
+            non_empty_seen += 1
+
+            if line.stripped.startswith(self.HEADER_MARKER):
+                version_part = line.stripped[len(self.HEADER_MARKER):].strip()
+                if version_part == self.HEADER_VERSION:
+                    header_line = line
+                    break
+
+            if non_empty_seen >= 5:
+                break
+
+        if not header_line:
             raise SansScriptError(
                 code="E_MISSING_HEADER",
-                message="Missing 'sans 1.0' header.",
-                line=line_no,
-                hint="Start the script with the literal 'sans 1.0'.",
+                message=f"Missing '{self.HEADER_MARKER}{self.HEADER_VERSION}' comment header within the first 5 non-empty lines.",
+                line=1,
+                hint="Start the script with a comment like '# sans 0.1'.",
             )
+
+        # Establish script span start/end
+        span_start = header_line.number
+        span_end = span_start
+
+        self._idx = 0
         statements: List[SansScriptStmt] = []
-        span_end = header.number
+        datasources: dict[str, DatasourceDeclaration] = {}
+        terminal_expr: Optional[TableExpr] = None
         while True:
             line = self._next_content_line()
             if not line:
                 break
-            stmt = self._parse_statement(line)
-            statements.append(stmt)
-            span_end = max(span_end, stmt.span.end)
-        span = SourceSpan(start=header.number, end=span_end)
-        return SansScript(statements=statements, span=span)
-
-    def _parse_statement(self, line: _Line) -> SansScriptStmt:
-        text = line.stripped.rstrip(";")
-        lower = text.lower()
-        if lower.startswith("format "):
-            return self._parse_format(line, text)
-        if lower.startswith("data "):
-            return self._parse_data(line, text)
-        if lower.startswith("sort "):
-            return self._parse_sort(line, text)
-        if lower.startswith("summary "):
-            return self._parse_summary(line, text)
-        if lower.startswith("select "):
-            return self._parse_select(line, text)
-        raise SansScriptError(
-            code="E_UNKNOWN_STMT",
-            message=f"Unknown statement: '{text}'.",
-            line=line.number,
-            hint="Only format, data, sort, summary, and select are supported in v1.",
-        )
-
-    def _parse_format(self, line: _Line, text: str) -> FormatStmt:
-        match = re.match(r"format\s+(\$?[a-zA-Z_]\w*)\s+do", text, re.IGNORECASE)
-        if not match:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="Malformed format declaration.",
-                line=line.number,
-                hint="Use: format $name do ... end",
-            )
-        name = match.group(1).lower()
-        body, end_line = self._collect_block(line)
-        entries: List[FormatEntry] = []
-        for body_line in body:
-            text_line = body_line.stripped.rstrip(";")
-            if not text_line or text_line.lower() == "run":
-                continue
-            if "=>" in text_line:
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message=f"FORMAT mappings must use '->', got '=>': '{text_line}'.",
-                    line=body_line.number,
-                    hint="Use: \"HIGH\" -> \"High risk\"",
-                )
-            if "->" in text_line:
-                arrow = "->"
+            
+            # Check if it's a binding or a terminal expression
+            if line.stripped.lower().startswith("let "):
+                stmt = self._parse_let_binding(line)
+                statements.append(stmt)
+                span_end = max(span_end, stmt.span.end)
+            elif line.stripped.lower().startswith("datasource "):
+                ds = self._parse_datasource_declaration(line)
+                # enforce unique names here (good error)
+                if ds.name in datasources:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message=f"Duplicate datasource name '{ds.name}'.",
+                        line=line.number,
+                    )
+                datasources[ds.name] = ds
+                statements.append(ds)  # optional; keep if your AST treats it as a stmt
+                span_end = max(span_end, ds.span.end)
+            elif line.stripped.lower().startswith("table "):
+                stmt = self._parse_table_binding(line)
+                statements.append(stmt)
+                span_end = max(span_end, stmt.span.end)
             else:
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message=f"Malformed mapping: '{text_line}'.",
-                    line=body_line.number,
-                )
-            lhs, rhs = [part.strip() for part in text_line.split(arrow, 1)]
-            is_other = lhs.lower() == "other"
-            key = "" if is_other else self._strip_quotes(lhs, body_line.number)
-            value = self._strip_quotes(rhs, body_line.number)
-            entries.append(FormatEntry(key=key, value=value, is_other=is_other))
-        ensure_true(
-            bool(entries),
-            code="E_PARSE",
-            message="FORMAT block must declare at least one mapping.",
-            line=line.number,
-        )
-        span = SourceSpan(start=line.number, end=end_line)
-        return FormatStmt(name=name, entries=entries, span=span)
+                # This must be the terminal table expression.
+                # It must be the very last content line.
+                next_content = self._peek_content_line()
+                if next_content:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message=f"Unexpected statement: '{line.stripped}'. Only let, datasource, and table bindings are supported before the terminal expression.",
+                        line=line.number,
+                    )
+                
+                terminal_expr = self._parse_table_expr(line)
+                span_end = max(span_end, terminal_expr.span.end)
+                break
 
-    def _parse_data(self, line: _Line, text: str) -> DataStmt:
-        match = re.match(r"data\s+(\w+)\s+do", text, re.IGNORECASE)
-        if not match:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="Malformed data declaration.",
-                line=line.number,
-                hint="Use: data <name> do ... end",
-            )
-        output = match.group(1).lower()
-        body, end_line = self._collect_block(line)
-        set_table: str | None = None
-        input_keep: List[str] = []
-        input_drop: List[str] = []
-        input_rename: Dict[str, str] = {}
-        input_where: ExprNode | None = None
-        statements: List[Dict[str, Any]] = []
-        keep_stmt: KeepStmt | None = None
-        drop_stmt: DropStmt | None = None
-        idx = 0
-        while idx < len(body):
-            body_line = body[idx]
-            content = body_line.stripped.rstrip(";")
-            if not content:
-                idx += 1
-                continue
-            lowered = content.lower()
-            if lowered.startswith("from "):
-                if set_table:
-                    raise SansScriptError(
-                        code="E_BAD_SET",
-                        message="Data step can contain only one FROM statement.",
-                        line=body_line.number,
-                    )
-                (
-                    set_table,
-                    input_keep,
-                    input_drop,
-                    input_rename,
-                    input_where,
-                    next_idx,
-                ) = self._parse_from_block(body, idx)
-                idx = next_idx
-                continue
-            if lowered.startswith("keep"):
-                if keep_stmt:
-                    raise SansScriptError(
-                        code="E_PARSE",
-                        message="Only one KEEP clause is allowed in a DATA block.",
-                        line=body_line.number,
-                    )
-                keep_stmt = KeepStmt(
-                    columns=self._parse_function_columns(content, "keep", body_line.number),
-                    span=SourceSpan(body_line.number, body_line.number),
-                )
-                idx += 1
-                continue
-            if lowered.startswith("drop"):
-                if drop_stmt:
-                    raise SansScriptError(
-                        code="E_PARSE",
-                        message="Only one DROP clause is allowed in a DATA block.",
-                        line=body_line.number,
-                    )
-                drop_stmt = DropStmt(
-                    columns=self._parse_function_columns(content, "drop", body_line.number),
-                    span=SourceSpan(body_line.number, body_line.number),
-                )
-                idx += 1
-                continue
-            if lowered.startswith("where"):
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message="WHERE is only allowed inside FROM blocks.",
-                    line=body_line.number,
-                    hint="Use filter(...) for output filtering.",
-                )
-            if lowered.startswith("rename"):
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message="RENAME is only allowed inside FROM blocks.",
-                    line=body_line.number,
-                )
-            stmt, next_idx = self._parse_flow_statement(body, idx)
-            statements.append(stmt)
-            idx = next_idx
-        if not set_table:
-            raise SansScriptError(
-                code="E_BAD_SET",
-                message="Data step missing FROM statement.",
-                line=line.number,
-                hint="Add one FROM <source> do ... end block to the data block.",
-            )
-        if keep_stmt and drop_stmt:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="KEEP and DROP cannot both be specified in a DATA block.",
-                line=line.number,
-            )
-        span = SourceSpan(start=line.number, end=end_line)
-        return DataStmt(
-            output=output,
-            table=set_table,
-            input_keep=input_keep,
-            input_drop=input_drop,
-            input_rename=input_rename,
-            input_where=input_where,
+        span = SourceSpan(start=span_start, end=span_end)
+        return SansScript(
             statements=statements,
-            keep=keep_stmt,
-            drop=drop_stmt,
+            terminal_expr=terminal_expr,
             span=span,
+            datasources=datasources,
         )
 
-    def _parse_sort(self, line: _Line, text: str) -> SortStmt:
-        match = re.match(r"sort\s+(\w+)\s*->\s*(\w+)\s+by\s+(.+)$", text, re.IGNORECASE)
-        if not match:
+    def _parse_datasource_declaration(self, line: _Line) -> DatasourceDeclaration:
+        s = line.stripped
+
+        # 1) parse leading: datasource <name> = <rest>
+        m = re.match(r"^datasource\s+([a-zA-Z_]\w*)\s*=\s*(.+)$", s, re.IGNORECASE)
+        if not m:
             raise SansScriptError(
                 code="E_PARSE",
-                message="Malformed SORT statement.",
+                message="Malformed datasource declaration.",
                 line=line.number,
-                hint="Use: sort <in> -> <out> by <cols> [nodupkey <true|false>]",
+                hint='Use: datasource name = csv("path/to/file.csv"[, columns(a, b)])  OR  datasource name = inline_csv do ... end',
             )
-        source = match.group(1).lower()
-        target = match.group(2).lower()
-        remainder = match.group(3)
-        nodupkey = False
-        nodup_text = ""
-        match = re.search(r"\s+nodupkey\s+", remainder, flags=re.IGNORECASE)
-        if match:
-            before = remainder[: match.start()]
-            after = remainder[match.end() :]
-            remainder = before
-            nodup_text = after.strip()
-        if nodup_text:
-            nodupkey = nodup_text.split()[0].lower() == "true"
-        by_cols = self._parse_columns(remainder, line.number)
-        ensure_true(
-            bool(by_cols),
-            code="E_PARSE",
-            message="SORT must specify at least one BY column.",
-            line=line.number,
-        )
-        span = SourceSpan(start=line.number, end=line.number)
-        return SortStmt(source=source, target=target, by=by_cols, nodupkey=nodupkey, span=span)
 
-    def _parse_summary(self, line: _Line, text: str) -> SummaryStmt:
-        match = re.match(r"summary\s+(\w+)\s*->\s*(\w+)\s+do", text, re.IGNORECASE)
-        if not match:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="Malformed SUMMARY statement.",
-                line=line.number,
-            )
-        source = match.group(1).lower()
-        target = match.group(2).lower()
-        body, end_line = self._collect_block(line)
-        class_line = self._find_body_line(body, "class")
-        var_line = self._find_body_line(body, "var")
-        ensure_true(
-            class_line is not None,
-            code="E_PARSE",
-            message="SUMMARY requires a CLASS clause.",
-            line=line.number,
-        )
-        ensure_true(
-            var_line is not None,
-            code="E_PARSE",
-            message="SUMMARY requires a VAR clause.",
-            line=line.number,
-        )
-        class_keys = self._parse_columns(class_line.stripped[6:], class_line.number)
-        vars_keys = self._parse_columns(var_line.stripped[4:], var_line.number)
-        span = SourceSpan(start=line.number, end=end_line)
-        return SummaryStmt(
-            source=source,
-            target=target,
-            class_keys=class_keys,
-            vars=vars_keys,
-            span=span,
-        )
+        name = m.group(1).lower()
+        rhs = m.group(2).strip()
 
-    def _parse_select(self, line: _Line, text: str) -> SelectStmt:
-        match = re.match(r"select\s+(\w+)\s*->\s*(\w+)(.*)$", text, re.IGNORECASE)
-        if not match:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="Malformed SELECT statement.",
-                line=line.number,
-            )
-        source = match.group(1).lower()
-        target = match.group(2).lower()
-        clause = match.group(3).strip()
-        keep: List[str] = []
-        drop: List[str] = []
-        if clause.lower().startswith("keep"):
-            keep = self._parse_function_columns(clause, "keep", line.number)
-        elif clause.lower().startswith("drop"):
-            drop = self._parse_function_columns(clause, "drop", line.number)
-        else:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="SELECT requires KEEP or DROP clause.",
-                line=line.number,
-            )
-        span = SourceSpan(start=line.number, end=line.number)
-        return SelectStmt(source=source, target=target, keep=keep, drop=drop, span=span)
-
-    def _parse_predicate_clause(self, content: str, keyword: str, line_no: int) -> ExprNode:
-        lowered = content.lower()
-        if not lowered.startswith(keyword):
-            raise SansScriptError(
-                code="E_PARSE",
-                message=f"Expected {keyword} clause, got '{content}'.",
-                line=line_no,
-            )
-        remainder = content[len(keyword):].strip()
-        if remainder.startswith("(") and remainder.endswith(")"):
-            remainder = remainder[1:-1].strip()
-        if not remainder:
-            raise SansScriptError(
-                code="E_PARSE",
-                message=f"{keyword.upper()} requires a predicate expression.",
-                line=line_no,
-            )
-        return self._parse_expr(remainder, line_no)
-
-    def _parse_assignment_stmt(self, content: str, line_no: int) -> Dict[str, Any] | None:
-        allow_overwrite = False
-        assign_text = content
-        if content.lower().startswith("derive!"):
-            allow_overwrite = True
-            assign_text = content[len("derive!"):].strip()
-            if not assign_text:
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message="DERIVE! requires an assignment target.",
-                    line=line_no,
-                )
-        match = re.match(r"([a-zA-Z_][\w\.]*)\s*=\s*(.+)", assign_text)
-        if not match:
-            return None
-        target = match.group(1).lower()
-        expr_str = match.group(2).strip()
-        return {
-            "type": "assign",
-            "target": target,
-            "expr": self._parse_expr(expr_str, line_no),
-            "allow_overwrite": allow_overwrite,
-        }
-
-    def _parse_inline_action(self, text: str, line_no: int) -> Dict[str, Any]:
-        lowered = text.strip().lower()
-        if lowered.startswith("filter"):
-            predicate = self._parse_predicate_clause(text.strip(), "filter", line_no)
-            return {"type": "filter", "predicate": predicate}
-        assignment = self._parse_assignment_stmt(text.strip(), line_no)
-        if assignment:
-            return assignment
-        raise SansScriptError(
-            code="E_PARSE",
-            message=f"Unsupported inline action: '{text}'.",
-            line=line_no,
-        )
-
-    def _parse_if_block(self, body: List[_Line], start_idx: int) -> tuple[Dict[str, Any], int]:
-        header_line = body[start_idx]
-        header = header_line.stripped.rstrip(";")
-        inline_match = re.match(
-            r"if\s+(.+?)\s+then\s+(.+?)(?:\s+else\s+(.+?))?\s+end$",
-            header,
+        # ------------------------------------------------------------------
+        # csv("path"[, columns(...)])
+        # ------------------------------------------------------------------
+        m_csv = re.match(
+            r'^csv\s*\(\s*"([^"]*)"\s*(?:,\s*columns\s*\(([^)]*)\)\s*)?\)$',
+            rhs,
             re.IGNORECASE,
         )
-        if inline_match:
-            predicate = self._parse_expr(inline_match.group(1).strip(), header_line.number)
-            then_action = self._parse_inline_action(inline_match.group(2).strip(), header_line.number)
-            else_action = None
-            if inline_match.group(3):
-                else_action = self._parse_inline_action(inline_match.group(3).strip(), header_line.number)
-            return {"type": "if_then", "predicate": predicate, "then": then_action, "else": else_action}, start_idx + 1
-
-        if not header.lower().startswith("if "):
-            raise SansScriptError(
-                code="E_PARSE",
-                message=f"Malformed IF statement: '{header}'.",
-                line=header_line.number,
+        if m_csv:
+            path = m_csv.group(1)
+            columns_str = m_csv.group(2)
+            columns = self._parse_columns(columns_str, line.number) if columns_str else []
+            return DatasourceDeclaration(
+                name=name,
+                kind="csv",
+                path=path,
+                columns=columns,
+                inline_text=None,
+                inline_sha256=None,
+                span=SourceSpan(line.number, line.number),
             )
-        condition = header[3:].strip()
-        if condition.lower().endswith(" then"):
-            condition = condition[:-5].strip()
-        predicate = self._parse_expr(condition, header_line.number)
-        idx = start_idx + 1
-        then_body: List[Dict[str, Any]] = []
-        else_body: List[Dict[str, Any]] = []
-        in_else = False
-        while idx < len(body):
-            line = body[idx]
-            content = line.stripped.rstrip(";")
-            lowered = content.lower()
-            if lowered == "end":
-                if not then_body:
+
+        # ------------------------------------------------------------------
+        # inline_csv [columns(...)] do ... end
+        #
+        # Accept:
+        #   datasource in = inline_csv do
+        #     a,b
+        #     1,2
+        #   end
+        #
+        # Or with optional schema pin:
+        #   datasource in = inline_csv columns(a,b) do
+        #     a,b
+        #     1,2
+        #   end
+        # ------------------------------------------------------------------
+        m_inline = re.match(
+            r"^inline_csv(?:\s+columns\s*\(([^)]*)\))?\s+do\s*$",
+            rhs,
+            re.IGNORECASE,
+        )
+        if m_inline:
+            columns_str = m_inline.group(1)
+            columns = self._parse_columns(columns_str, line.number) if columns_str else []
+
+            # read block lines until `end`
+            body_lines: list[str] = []
+            start_line = line.number
+
+            while True:
+                next_line = self._next_line_raw()  # <-- you need a helper that returns the next _Line without skipping comments
+                if next_line is None:
                     raise SansScriptError(
                         code="E_PARSE",
-                        message="IF block must contain at least one statement.",
-                        line=header_line.number,
+                        message="Unterminated inline_csv block: expected 'end'.",
+                        line=start_line,
                     )
-                then_stmt: Dict[str, Any] = then_body[0] if len(then_body) == 1 else {"type": "block", "body": then_body}
-                else_stmt: Dict[str, Any] | None = None
-                if else_body:
-                    else_stmt = else_body[0] if len(else_body) == 1 else {"type": "block", "body": else_body}
-                return {"type": "if_then", "predicate": predicate, "then": then_stmt, "else": else_stmt}, idx + 1
-            if lowered == "else":
-                in_else = True
-                idx += 1
-                continue
-            stmt, next_idx = self._parse_flow_statement(body, idx)
-            if in_else:
-                else_body.append(stmt)
-            else:
-                then_body.append(stmt)
-            idx = next_idx
+                if next_line.stripped.lower() == "end":
+                    end_line = next_line.number
+                    break
+                body_lines.append(next_line.raw)  # or next_line.text; whichever preserves original (minus \r)
+
+            normalized = _normalize_inline_csv(body_lines)
+            sha = _sha256_text(normalized)
+
+            return DatasourceDeclaration(
+                name=name,
+                kind="inline_csv",
+                path=None,
+                columns=columns,
+                inline_text=normalized,
+                inline_sha256=sha,
+                span=SourceSpan(start_line, end_line),
+            )
+
+        # If neither form matched:
         raise SansScriptError(
             code="E_PARSE",
-            message="Missing 'end' for IF block.",
-            line=header_line.number,
-        )
-
-    def _parse_flow_statement(self, body: List[_Line], start_idx: int) -> tuple[Dict[str, Any], int]:
-        line = body[start_idx]
-        content = line.stripped.rstrip(";")
-        lowered = content.lower()
-        if lowered.startswith("filter"):
-            predicate = self._parse_predicate_clause(content, "filter", line.number)
-            return {"type": "filter", "predicate": predicate}, start_idx + 1
-        if lowered.startswith("if "):
-            return self._parse_if_block(body, start_idx)
-        if lowered.startswith("case "):
-            raise SansScriptError(
-                code="E_PARSE",
-                message="CASE blocks are not supported yet.",
-                line=line.number,
-            )
-        assignment = self._parse_assignment_stmt(content, line.number)
-        if assignment:
-            return assignment, start_idx + 1
-        raise SansScriptError(
-            code="E_UNKNOWN_STMT",
-            message=f"Unsupported data step clause: '{content}'.",
+            message="Malformed datasource declaration.",
             line=line.number,
+            hint=(
+                'Use: datasource name = csv("path/to/file.csv"[, columns(a, b)])\n'
+                "Or:  datasource name = inline_csv [columns(...)] do\\n  ...csv lines...\\nend"
+            ),
         )
 
-    def _parse_from_block(self, body: List[_Line], start_idx: int) -> tuple[
-        str,
-        List[str],
-        List[str],
-        Dict[str, str],
-        ExprNode | None,
-        int,
-    ]:
-        header_line = body[start_idx]
-        text = header_line.stripped.rstrip(";")
-        match = re.match(r"from\s+(\w+)\s+do", text, re.IGNORECASE)
+    def _parse_let_binding(self, line: _Line) -> LetBinding:
+        # let name = <scalar-expr> | map(...)
+        match = re.match(r"let\s+([a-zA-Z_]\w*)\s*=\s*(.+)", line.stripped, re.IGNORECASE)
         if not match:
             raise SansScriptError(
-                code="E_BAD_SET",
-                message=f"Malformed FROM clause: '{text}'.",
-                line=header_line.number,
+                code="E_PARSE",
+                message="Malformed let binding.",
+                line=line.number,
+                hint="Use: let name = expression",
             )
-        table = match.group(1).lower()
-        keep_cols: List[str] = []
-        drop_cols: List[str] = []
-        rename_map: Dict[str, str] = {}
-        where_expr: ExprNode | None = None
-        idx = start_idx + 1
+        name = match.group(1).lower()
+        rhs = match.group(2).strip()
+
+        if rhs.lower().startswith("map("):
+            # Check if it's a multiline map or single line
+            if rhs.lower().endswith(")") or ")" in rhs:
+                # Try parsing as single line first
+                expr = self._parse_map_expr(rhs, line.number)
+                span = SourceSpan(line.number, line.number)
+            else:
+                 # Multiline map
+                body, end_line = self._collect_block_by_parens(line, "map")
+                # Reconstruct RHS for map parsing
+                full_rhs = rhs + "\n" + "\n".join(l.text for l in body) + "\n)"
+                expr = self._parse_map_expr(full_rhs, line.number)
+                span = SourceSpan(line.number, end_line)
+        else:
+            expr = self._parse_expr(rhs, line.number)
+            span = SourceSpan(line.number, line.number)
+
+        return LetBinding(name=name, expr=expr, span=span)
+
+    def _parse_table_binding(self, line: _Line) -> TableBinding:
+        # table name = <table-expr>
+        match = re.match(r"table\s+([a-zA-Z_]\w*)\s*=\s*(.+)", line.stripped, re.IGNORECASE)
+        if not match:
+            raise SansScriptError(
+                code="E_PARSE",
+                message="Malformed table binding.",
+                line=line.number,
+                hint="Use: table name = table_expression",
+            )
+        name = match.group(1).lower()
+        rhs_start = match.group(2).strip()
+        
+        # We need to handle the case where <table-expr> might involve a block (do...end)
+        expr = self._parse_table_expr(line, rhs_override=rhs_start)
+        return TableBinding(name=name, expr=expr, span=expr.span)
+
+    def _parse_table_expr(self, line: _Line, rhs_override: Optional[str] = None) -> TableExpr:
+        text = rhs_override if rhs_override is not None else line.stripped
+        
+        primary: TableExpr
+        remainder: str = ""
+        end_line = line.number
+
+        if text.lower().startswith("from("):
+            # from(datasource_name)
+            inner, remainder = self._extract_balanced_parens(text[4:], line.number)
+            source = inner.strip().lower()
+            primary = FromExpr(source=source, span=SourceSpan(line.number, line.number))
+            
+            if remainder.lower().startswith("do") or remainder.lower() == "do":
+                body, end_line = self._collect_block(line)
+                steps = self._parse_pipeline_steps(body)
+                primary = PipelineExpr(source=primary, steps=steps, span=SourceSpan(line.number, end_line))
+                remainder = ""
+        elif text.lower().startswith("sort("):
+            inner, remainder = self._extract_balanced_parens(text[4:], line.number)
+            # Recursively parse inner as table expr
+            source = self._parse_table_expr(line, rhs_override=inner)
+            primary, remainder, end_line = self._parse_builder("sort", source, remainder, line)
+        elif text.lower().startswith("summary("):
+            inner, remainder = self._extract_balanced_parens(text[7:], line.number)
+            source = self._parse_table_expr(line, rhs_override=inner)
+            primary, remainder, end_line = self._parse_builder("summary", source, remainder, line)
+        else:
+            # Table name
+            name_match = re.match(r"([a-zA-Z_]\w*)(.*)", text)
+            if not name_match:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message=f"Expected table expression, got '{text}'.",
+                    line=line.number,
+                )
+            name = name_match.group(1).lower()
+            remainder = name_match.group(2).strip()
+            primary = TableNameExpr(name=name, span=SourceSpan(line.number, line.number))
+
+        return self._parse_postfix_clauses(primary, remainder, end_line)
+
+    def _extract_balanced_parens(self, text: str, line_no: int) -> tuple[str, str]:
+        """Expects text to start after an opening '('. Returns (inner, remainder)."""
+        # Text starts with '(...'
+        if not text.startswith("("):
+             raise SansScriptError(code="E_PARSE", message="Expected '(", line=line_no)
+        
+        depth = 0
+        for i, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[1:i], text[i+1:].strip()
+        
+        raise SansScriptError(code="E_PARSE", message="Unbalanced parentheses", line=line_no)
+
+    def _parse_pipeline_steps(self, body: List[_Line]) -> List[TableTransform]:
+        steps: List[TableTransform] = []
+        idx = 0
         while idx < len(body):
             line = body[idx]
             content = line.stripped.rstrip(";")
+            idx += 1
+            if not content: continue
+            
             lowered = content.lower()
-            if not content:
-                idx += 1
-                continue
-            if lowered == "end":
-                if keep_cols and drop_cols:
-                    raise SansScriptError(
-                        code="E_PARSE",
-                        message="KEEP and DROP cannot both be specified in a FROM block.",
-                        line=line.number,
-                    )
-                return table, keep_cols, drop_cols, rename_map, where_expr, idx + 1
-            if lowered.startswith("keep"):
-                if keep_cols:
-                    raise SansScriptError(
-                        code="E_PARSE",
-                        message="Only one KEEP clause is allowed in a FROM block.",
-                        line=line.number,
-                    )
-                keep_cols = self._parse_function_columns(content, "keep", line.number)
-                idx += 1
-                continue
-            if lowered.startswith("drop"):
-                if drop_cols:
-                    raise SansScriptError(
-                        code="E_PARSE",
-                        message="Only one DROP clause is allowed in a FROM block.",
-                        line=line.number,
-                    )
-                drop_cols = self._parse_function_columns(content, "drop", line.number)
-                idx += 1
-                continue
-            if lowered.startswith("rename"):
-                rename_map.update(self._parse_rename(content, line.number).mappings)
-                idx += 1
-                continue
-            if lowered.startswith("where"):
-                if where_expr is not None:
-                    raise SansScriptError(
-                        code="E_PARSE",
-                        message="Only one WHERE clause is allowed in a FROM block.",
-                        line=line.number,
-                    )
-                where_expr = self._parse_predicate_clause(content, "where", line.number)
-                idx += 1
-                continue
-            if lowered.startswith("filter"):
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message="FILTER is only allowed at data step scope.",
-                    line=line.number,
-                )
-            if lowered.startswith("if "):
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message="IF is only allowed at data step scope.",
-                    line=line.number,
-                )
-            if lowered.startswith("case "):
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message="CASE is only allowed at data step scope.",
-                    line=line.number,
-                )
-            raise SansScriptError(
-                code="E_UNKNOWN_STMT",
-                message=f"Unsupported FROM clause: '{content}'.",
-                line=line.number,
-            )
-        raise SansScriptError(
-            code="E_PARSE",
-            message="Missing 'end' for FROM block.",
-            line=header_line.number,
-        )
+            
+            # Identify keyword and initial args
+            kw = None
+            kw_len = 0
+            
+            processed_content = content
+            processed_lowered = lowered
 
-    def _parse_function_columns(self, content: str, keyword: str, line_no: int) -> List[str]:
-        inner = self._extract_parenthesized_content(content, keyword, line_no)
-        return [col.strip().lower() for col in re.split(r"[\\s,]+", inner) if col.strip()]
+            for k in ["select", "filter", "derive", "rename", "drop"]:
+                if processed_lowered.startswith(k + " ") or processed_lowered.startswith(k + "("):
+                    kw = k
+                    kw_len = len(k)
+                    break
+            
+            if kw:
+                args = processed_content[kw_len:].strip()
+                
+                # Check for 'do' block
+                if args.lower() == "do" or args.lower().endswith(" do"):
+                     block_lines = []
+                     temp_idx = idx
+                     depth = 0
+                     found_end = False
+                     
+                     while temp_idx < len(body):
+                         l = body[temp_idx]
+                         cleaned = l.stripped.rstrip(";").lower()
+                         if cleaned == "end":
+                             if depth == 0:
+                                 found_end = True
+                                 temp_idx += 1
+                                 break
+                             depth -= 1
+                         elif cleaned.endswith(" do"):
+                             depth += 1
+                         
+                         block_lines.append(l.stripped.rstrip(";"))
+                         temp_idx += 1
+                     
+                     if not found_end:
+                         raise SansScriptError(code="E_PARSE", message="Missing 'end' for nested block.", line=line.number)
+                     
+                     idx = temp_idx
+                     block_content = ", ".join(block_lines)
+                     
+                     if args.lower() == "do":
+                         args = block_content
+                     else:
+                         prefix = args[:-2].strip()
+                         args = (prefix + ", " + block_content) if prefix else block_content
 
-    def _extract_parenthesized_content(self, content: str, keyword: str, line_no: int) -> str:
-        lower = content.lower()
-        if not lower.startswith(keyword):
-            raise SansScriptError(
-                code="E_PARSE",
-                message=f"Expected '{keyword}()' syntax, got '{content}'.",
-                line=line_no,
-            )
-        remainder = content[len(keyword):].strip()
-        if not remainder.startswith("(") or not remainder.endswith(")"):
-            raise SansScriptError(
-                code="E_PARSE",
-                message=f"Malformed {keyword.upper()} call: '{content}'.",
-                line=line_no,
-                hint=f"Use {keyword}(col1, col2, ...).",
-            )
-        return remainder[1:-1].strip()
+                # Multiline parens logic for args
+                elif args.startswith("(") and not args.endswith(")"):
+                    # This implies the multiline parsing should be handled here, 
+                    # consuming multiple 'line' objects from 'body'
+                    
+                    # Store current idx to restore if no match, or consume lines
+                    current_idx_in_body = idx - 1 # Current 'line' is body[idx-1]
+                    matched_parens = False
+                    
+                    full_args_lines = []
+                    temp_idx = current_idx_in_body
+                    temp_depth = 0
+                    
+                    # Find the opening paren in the 'args' part of the current line
+                    paren_start_pos = args.find("(")
+                    if paren_start_pos != -1:
+                        temp_depth += 1
+                        full_args_lines.append(args[paren_start_pos:])
+                        
+                        while temp_idx < len(body):
+                            if temp_idx > current_idx_in_body: # Only process subsequent lines
+                                stripped = body[temp_idx].stripped.rstrip(";")
+                                full_args_lines.append(stripped)
+                            else:
+                                stripped = args[paren_start_pos + 1:]
+                                
+                            for char in stripped:
+                                if char == "(": temp_depth += 1
+                                elif char == ")": temp_depth -= 1
+                            
+                            if temp_depth == 0:
+                                matched_parens = True
+                                # Consume lines up to here
+                                idx = temp_idx + 1 
+                                break
+                            temp_idx += 1
+                    
+                    if matched_parens:
+                        all_text = " ".join(full_args_lines)
+                        # The args should be the content INSIDE the outermost balanced parens
+                        start_paren = all_text.find("(")
+                        end_paren = all_text.rfind(")")
+                        if start_paren != -1 and end_paren != -1:
+                            args = all_text[start_paren:end_paren+1]
+                        else:
+                            raise SansScriptError(code="E_PARSE", message="Malformed multiline parenthesized arguments.", line=line.number)
+                    else:
+                        raise SansScriptError(code="E_PARSE", message="Unbalanced parentheses in multiline argument.", line=line.number)
 
-    def _parse_rename(self, content: str, line_no: int) -> RenameStmt:
-        inner = self._extract_parenthesized_content(content, "rename", line_no)
-        rename_map: dict[str, str] = {}
-        if not inner:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="RENAME requires at least one mapping.",
-                line=line_no,
-            )
-        for token in [tok.strip() for tok in inner.split(",") if tok.strip()]:
-            if "=>" in token:
-                raise SansScriptError(
-                    code="E_PARSE",
-                    message=f"RENAME mappings must use '->', got '=>': '{token}'.",
-                    line=line_no,
-                    hint="Use: rename(old -> new)",
-                )
-            if "->" in token:
-                arrow = "->"
+
+                transform = self._parse_transform_clause(kw, args, line.number)
+                steps.append(transform)
+
+            elif processed_lowered.startswith("sort()") or processed_lowered.startswith("summary()"):
+                 raise SansScriptError(code="E_NOT_IMPL", message="Implicit source builders in pipeline not yet implemented.", line=line.number)
             else:
                 raise SansScriptError(
                     code="E_PARSE",
-                    message=f"Malformed rename mapping: '{token}'.",
-                    line=line_no,
+                    message=f"Unknown pipeline transform: '{content}'.",
+                    line=line.number,
                 )
-            old, new = [part.strip().lower() for part in token.split(arrow, 1)]
-            rename_map[old] = new
-        return RenameStmt(mappings=rename_map, span=SourceSpan(line_no, line_no))
+        return steps
+
+    def _parse_builder(self, kind: str, source: TableExpr, remainder: str, line: _Line) -> tuple[BuilderExpr, str, int]:
+        config: Dict[str, Any] = {}
+        curr_rem = remainder
+        curr_line = line.number
+        
+        while True:
+            if not curr_rem:
+                # Peek at next line
+                next_line = self._peek_content_line()
+                if next_line and next_line.stripped.startswith("."):
+                    self._next_content_line() # consume it
+                    curr_rem = next_line.stripped
+                    curr_line = next_line.number
+                else:
+                    break
+
+            match = re.match(r"\.([a-zA-Z_]\w*)\(([^)]*)\)(.*)", curr_rem)
+            if not match:
+                break
+            method = match.group(1).lower()
+            args_str = match.group(2).strip()
+            curr_rem = match.group(3).strip()
+            
+            if kind == "sort":
+                if method == "by":
+                    config["by"] = self._parse_columns(args_str, curr_line)
+                elif method == "nodupkey":
+                    config["nodupkey"] = args_str.lower() == "true"
+                else:
+                    raise SansScriptError(code="E_PARSE", message=f"Unknown sort builder method: {method}", line=curr_line)
+            elif kind == "summary":
+                if method == "class":
+                    config["class"] = self._parse_columns(args_str, curr_line)
+                elif method == "var":
+                    config["var"] = self._parse_columns(args_str, curr_line)
+                elif method == "stats":
+                    config["stats"] = self._parse_columns(args_str, curr_line)
+                else:
+                    raise SansScriptError(code="E_PARSE", message=f"Unknown summary builder method: {method}", line=curr_line)
+        
+        return BuilderExpr(kind=kind, source=source, config=config, span=SourceSpan(line.number, curr_line)), curr_rem, curr_line
+
+    def _parse_postfix_clauses(self, primary: TableExpr, remainder: str, end_line: int) -> TableExpr:
+        curr_expr = primary
+        curr_rem = remainder
+        curr_end_line = end_line
+        
+        while True:
+            if not curr_rem:
+                # Peek at next line for postfix keywords or bracket sugar
+                next_line = self._peek_content_line()
+                if next_line:
+                    s = next_line.stripped.lower()
+                    # Check if it looks like a postfix clause or bracket sugar
+                    if s.startswith("[") or any(s.startswith(kw + " ") or s.startswith(kw + "(") for kw in ["select", "filter", "derive", "rename", "drop"]):
+                        self._next_content_line() # consume it
+                        curr_rem = next_line.stripped
+                        curr_end_line = next_line.number
+                    else:
+                        break
+                else:
+                    break
+
+            if curr_rem.startswith("["):
+                # Bracket sugar for select
+                match = re.match(r"\[([^\]]+)\](.*)", curr_rem)
+                if not match:
+                    break
+                cols = self._parse_columns(match.group(1), curr_end_line)
+                transform = TableTransform(kind="select", params={"keep": cols}, span=SourceSpan(curr_end_line, curr_end_line))
+                curr_expr = PostfixExpr(source=curr_expr, transform=transform, span=SourceSpan(primary.span.start, curr_end_line))
+                curr_rem = match.group(2).strip()
+                continue
+
+            match = re.match(r"(select|filter|derive|rename|drop)(?:\s+|\()", curr_rem, re.IGNORECASE)
+            if not match:
+                break
+            
+            kind = match.group(1).lower()
+            # We need to find the full args_part. 
+            # If it started with '(', we need to find the matching ')'
+            if curr_rem[len(kind)] == "(":
+                 inner, next_rem = self._extract_balanced_parens(curr_rem[len(kind):], curr_end_line)
+                 this_args = "(" + inner + ")"
+                 curr_rem = next_rem
+            else:
+                 args_part = curr_rem[len(kind):].strip()
+                 # Simple heuristic: split by next keyword
+                 next_kw_match = re.search(r"\s+(select|filter|derive|rename|drop)(?:\s+|\()", args_part, re.IGNORECASE)
+                 if next_kw_match:
+                     this_args = args_part[:next_kw_match.start()].strip()
+                     curr_rem = args_part[next_kw_match.start():].strip()
+                 else:
+                     this_args = args_part
+                     curr_rem = ""
+            
+            transform = self._parse_transform_clause(kind, this_args, curr_end_line)
+            curr_expr = PostfixExpr(source=curr_expr, transform=transform, span=SourceSpan(primary.span.start, curr_end_line))
+            
+        if curr_rem.strip():
+             raise SansScriptError(
+                code="E_PARSE",
+                message=f"Unexpected trailing content: '{curr_rem.strip()}'.",
+                line=curr_end_line,
+            )
+            
+        return curr_expr
+
+    def _parse_transform_clause(self, kind: str, args_str: str, line_no: int) -> TableTransform:
+        params: Dict[str, Any] = {}
+        if kind == "select":
+            params["keep"] = self._parse_columns(args_str, line_no)
+        elif kind == "drop":
+            params["drop"] = self._parse_columns(args_str, line_no)
+        elif kind == "filter":
+            # Strip parens if present
+            if args_str.startswith("(") and args_str.endswith(")"):
+                args_str = args_str[1:-1].strip()
+            params["predicate"] = self._parse_expr(args_str, line_no)
+        elif kind == "derive":
+            # derive(a = 1, update! b = 2)
+            if args_str.startswith("(") and args_str.endswith(")"):
+                args_str = args_str[1:-1].strip()
+            params["assignments"] = self._parse_derive_assignments(args_str, line_no)
+        elif kind == "rename":
+            if args_str.startswith("(") and args_str.endswith(")"):
+                args_str = args_str[1:-1].strip()
+            params["mappings"] = self._parse_rename_mappings(args_str, line_no)
+        
+        return TableTransform(kind=kind, params=params, span=SourceSpan(line_no, line_no))
+
+    def _parse_derive_assignments(self, text: str, line_no: int) -> List[Dict[str, Any]]:
+        parts = self._split_by_comma_respecting_parens(text)
+        assignments = []
+        for part in parts:
+            part = part.strip()
+            allow_overwrite = False
+            if part.lower().startswith("update!"):
+                allow_overwrite = True
+                part = part[7:].strip()
+            
+            match = re.match(r"([a-zA-Z_]\w*)\s*=\s*(.+)", part)
+            if not match:
+                raise SansScriptError(code="E_PARSE", message=f"Malformed derive assignment: {part}", line=line_no)
+            
+            assignments.append({
+                "type": "assign",
+                "target": match.group(1).lower(),
+                "expr": self._parse_expr(match.group(2).strip(), line_no),
+                "allow_overwrite": allow_overwrite
+            })
+        return assignments
+
+    def _parse_rename_mappings(self, text: str, line_no: int) -> Dict[str, str]:
+        parts = text.split(",")
+        mappings = {}
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            if "->" not in part:
+                 raise SansScriptError(code="E_PARSE", message=f"Rename mapping must use '->': {part}", line=line_no)
+            old, new = part.split("->")
+            mappings[old.strip().lower()] = new.strip().lower()
+        return mappings
+
+    def _parse_map_expr(self, text: str, line_no: int) -> MapExpr:
+        # map("A" -> "B", _ -> "C")
+        inner = text.strip()
+        if inner.lower().startswith("map("):
+            inner = inner[4:].strip()
+            if inner.endswith(")"):
+                inner = inner[:-1].strip()
+        
+        entries: List[MapEntry] = []
+        parts = self._split_by_comma_respecting_parens(inner)
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            if "->" not in part:
+                 raise SansScriptError(code="E_PARSE", message=f"Map entry must use '->': {part}", line=line_no)
+            lhs, rhs = part.split("->", 1)
+            lhs = lhs.strip()
+            rhs = rhs.strip()
+            
+            key: Optional[str] = None
+            if lhs == "_":
+                key = None
+            else:
+                key = self._strip_quotes(lhs, line_no)
+            
+            value = self._parse_expr(rhs, line_no)
+            entries.append(MapEntry(key=key, value=value, span=SourceSpan(line_no, line_no)))
+        
+        return MapExpr(entries=entries, span=SourceSpan(line_no, line_no))
+
+    def _split_by_comma_respecting_parens(self, text: str) -> List[str]:
+        parts = []
+        curr = ""
+        depth = 0
+        for char in text:
+            if char == "(": depth += 1
+            elif char == ")": depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(curr)
+                curr = ""
+                continue
+            curr += char
+        parts.append(curr)
+        return [p.strip() for p in parts if p.strip()]
 
     def _parse_columns(self, segment: str, line_no: int) -> List[str]:
         cols = [part.strip().strip(",") for part in re.split(r"[\s,]+", segment) if part.strip()]
@@ -660,67 +723,35 @@ class SansScriptParser:
                 depth -= 1
                 body.append(line)
                 continue
-            if cleaned.startswith("case "):
+            if cleaned.endswith(" do"):
                 depth += 1
-            elif cleaned.startswith("from ") and cleaned.endswith(" do"):
-                depth += 1
-            elif cleaned.startswith("if "):
-                inline_if = re.match(r"if\s+.+\s+then\s+.+\s+end$", cleaned)
-                if not inline_if:
-                    depth += 1
             body.append(line)
 
-    def _consume_case_block(
-        self, body: List[_Line], start_idx: int, line_no: int
-    ) -> int:
-        idx = start_idx + 1
-        depth = 0
-        saw_when = False
-        saw_else = False
-        matched_end = False
-        while idx < len(body):
-            normalized = body[idx].stripped.rstrip(";").lower()
-            if normalized.startswith("case "):
-                depth += 1
-            elif normalized.startswith("when "):
-                saw_when = True
-            elif normalized == "else":
-                saw_else = True
-            elif normalized == "end":
-                if depth == 0:
-                    matched_end = True
-                    break
-                depth -= 1
-            idx += 1
-        if not matched_end:
-            raise SansScriptError(
-                code="E_PARSE",
-                message="CASE block missing closing END.",
-                line=line_no,
-            )
-        ensure_true(
-            saw_when,
-            code="E_PARSE",
-            message="CASE requires at least one WHEN clause.",
-            line=line_no,
-        )
-        ensure_true(
-            saw_else,
-            code="E_INCOMPLETE_CASE",
-            message="CASE requires an ELSE clause.",
-            line=line_no,
-        )
-        return idx + 1
-
-    def _find_body_line(self, body: List[_Line], prefix: str) -> Optional[_Line]:
-        for line in body:
-            if line.stripped.lower().startswith(prefix.lower() + " "):
-                return line
-        return None
+    def _collect_block_by_parens(self, header: _Line, start_word: str) -> tuple[List[_Line], int]:
+        body: List[_Line] = []
+        depth = 1 # We assumed we saw the opening '('
+        while True:
+            line = self._next_content_line()
+            if not line:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message=f"Missing ')' for {start_word}.",
+                    line=header.number,
+                )
+            for char in line.text:
+                if char == "(": depth += 1
+                elif char == ")": depth -= 1
+            
+            if depth == 0:
+                # We need to be careful if there's trailing content on the same line as ')'
+                return body, line.number
+            body.append(line)
 
     def _ensure_sans_expr_rules(self, text: str, line_no: int) -> None:
         if not self._file_name:
             return
+        # Basic check for == and !=
+        # This is a bit naive if they are inside strings, but tokenize should handle it.
         for token in tokenize(text, self._file_name):
             if token.type != "OPERATOR":
                 continue
@@ -744,6 +775,17 @@ class SansScriptParser:
                 line=line_no,
             )
 
+    def _peek_content_line(self) -> Optional[_Line]:
+        idx = self._idx
+        while idx < len(self._lines):
+            line = self._lines[idx]
+            stripped = line.stripped
+            if not stripped or stripped.startswith("#"):
+                idx += 1
+                continue
+            return line
+        return None
+
     def _next_content_line(self) -> Optional[_Line]:
         while self._idx < len(self._lines):
             line = self._lines[self._idx]
@@ -754,10 +796,19 @@ class SansScriptParser:
             return line
         return None
 
+    def _next_line_raw(self) -> _Line | None:
+        if self._idx >= len(self._lines):
+            return None
+        line = self._lines[self._idx]
+        self._idx += 1
+        return line
+
     def _strip_quotes(self, token: str, line_no: int) -> str:
         value = token.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", "\""}:
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             return value[1:-1]
+        if not value: # Handle empty string case
+            return ""
         raise SansScriptError(
             code="E_PARSE",
             message=f"Expected quoted literal, got '{token}'.",

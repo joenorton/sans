@@ -22,6 +22,8 @@ TOKEN_PATTERNS = [
     (r"==|!=|<=|>=|\^=|~=|=|<|>|\+|-|\*|\/", "OPERATOR"), # Multi-char operators first, then single-char
     (r"\(", "LPAREN"),
     (r"\)", "RPAREN"),
+    (r"\[", "LBRACKET"),
+    (r"\]", "RBRACKET"),
     (r",", "COMMA"),
 ]
 
@@ -134,6 +136,13 @@ class Parser:
                 if function_name not in ["coalesce", "if", "put", "input"]:
                      raise ValueError(f"Unsupported function '{function_name}'")
                 left_expr = call(function_name, args)
+            elif self.current_token() and self.current_token().type == "LBRACKET":
+                # Bracket lookup: map[key] -> desugar to put(key, "map")
+                map_name = token.value.lower()
+                self.consume("LBRACKET")
+                key_expr = self.parse_expression()
+                self.consume("RBRACKET")
+                left_expr = call("put", [key_expr, lit(map_name)])
             else:
                 # If not a function call, then it's a column ref (only if IDENTIFIER)
                 if token.type == "IDENTIFIER":

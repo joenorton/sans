@@ -110,20 +110,28 @@ def _sort_rows(rows: List[Dict[str, Any]], by_spec: Any, nodupkey: bool = False)
                 "SANS_RUNTIME_SORT_UNSUPPORTED",
                 "Descending sort is not supported in v0.1 runtime.",
             )
-    def sort_key(row: Dict[str, Any]):
+    
+    # To ensure stable sort in Python, we use the original index as a secondary key
+    # though Python's sort is already stable.
+    def sort_key(indexed_row: tuple[int, Dict[str, Any]]):
+        idx, row = indexed_row
         return tuple(_sort_key_value(row.get(col)) for col, _ in by_cols)
-    sorted_rows = sorted([dict(r) for r in rows], key=sort_key)
+    
+    indexed_rows = list(enumerate(rows))
+    sorted_indexed = sorted(indexed_rows, key=sort_key)
+    
     if not nodupkey:
-        return sorted_rows
+        return [dict(r) for _, r in sorted_indexed]
 
     deduped: List[Dict[str, Any]] = []
     last_key: Optional[tuple[Any, ...]] = None
-    for row in sorted_rows:
+    for _, row in sorted_indexed:
         key = tuple(row.get(col) for col, _ in by_cols)
         if last_key is not None and key == last_key:
-            deduped[-1] = row  # Keep last row for duplicate key
+            # Rule: Keep FIRST row encountered in sort order (which is first in input order if keys equal)
+            continue
         else:
-            deduped.append(row)
+            deduped.append(dict(row))
             last_key = key
     return deduped
 
@@ -544,7 +552,7 @@ def _execute_data_step(
                 if not allow_overwrite and target in row:
                     raise RuntimeFailure(
                         "SANS_RUNTIME_ASSIGN_OVERWRITE",
-                        f"Assignment to existing column '{target}' requires derive! in sans scripts.",
+                        f"Assignment to existing column '{target}' requires update! in sans scripts.",
                     )
                 row[target] = _eval_expr(stmt["expr"], row, formats)
             elif stype == "filter":
@@ -980,6 +988,8 @@ def _execute_summary(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> L
     params = step.params or {}
     class_vars = params.get("class") or []
     var_vars = params.get("vars") or []
+    # stats might be missing in older IR, default to mean
+    stats = params.get("stats", ["mean"])
 
     input_table = step.inputs[0]
     input_rows = tables.get(input_table, [])
@@ -995,11 +1005,17 @@ def _execute_summary(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> L
     outputs: List[Dict[str, Any]] = []
     for key in sorted(groups.keys(), key=group_sort_key):
         rows = groups[key]
+        # Order: all class keys, then aggregate columns
         out_row: Dict[str, Any] = {col: key[idx] for idx, col in enumerate(class_vars)}
         for var in var_vars:
-            values = [r.get(var) for r in rows if r.get(var) is not None]
-            mean_val = (sum(values) / len(values)) if values else None
-            out_row[f"{var}_mean"] = mean_val
+            for stat in stats:
+                if stat == "mean":
+                    values = [r.get(var) for r in rows if r.get(var) is not None]
+                    val = (sum(values) / len(values)) if values else None
+                else:
+                    # In future, handle other stats
+                    val = None
+                out_row[f"{var}_{stat}"] = val
         outputs.append(out_row)
     return outputs
 
@@ -1319,19 +1335,33 @@ def run_script(
 
     # Extend outputs with runtime outputs and hashes if available.
     runtime_out_entries = []
+    bundle_root = Path(out_dir).resolve()
+
     for out in result.outputs:
-        path = Path(out["path"])
-        entry = {"path": path.as_posix(), "sha256": compute_artifact_hash(path)}
+        abs_path = Path(out["path"]).resolve()
+
+        # bundle-relative path for manifests (report/evidence)
+        try:
+            rel_path = abs_path.relative_to(bundle_root)
+        except ValueError:
+            # If something produced a path outside the bundle root, refuse loudly.
+            raise RuntimeError(f"Runtime output path is outside bundle dir: {abs_path} (bundle={bundle_root})")
+
+        rel_posix = rel_path.as_posix()
+
+        entry = {"path": rel_posix, "sha256": compute_artifact_hash(abs_path)}
         report["outputs"].append(entry)
+
         runtime_out_entries.append({
             "name": out["table"],
-            "path": path.as_posix(),
-            "format": path.suffix.lstrip(".").lower() or "csv",
-            "bytes_sha256": compute_raw_hash(path),
+            "path": rel_posix,
+            "format": rel_path.suffix.lstrip(".").lower() or "csv",
+            "bytes_sha256": compute_raw_hash(abs_path),
             "canonical_sha256": entry["sha256"],
             "row_count": out["rows"],
-            "columns": out["columns"]
+            "columns": out["columns"],
         })
+
 
     # 1. Emit registry.candidate.json
     registry = {
@@ -1362,7 +1392,7 @@ def run_script(
 
     registry_path = Path(out_dir) / "registry.candidate.json"
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-    report["outputs"].append({"path": registry_path.as_posix(), "sha256": compute_artifact_hash(registry_path)})
+    report["outputs"].append({"path": registry_path.name, "sha256": compute_artifact_hash(registry_path)})
 
     # 2. Emit runtime.evidence.json
     evidence = {
@@ -1373,7 +1403,7 @@ def run_script(
             "path": "plan.ir.json",
             "sha256": compute_raw_hash(Path(out_dir) / "plan.ir.json")
         },
-        "bindings": {name: Path(p).as_posix() for name, p in bindings.items()},
+        "bindings": {name: Path(p).name for name, p in bindings.items()},
         "inputs": [],
         "outputs": runtime_out_entries,
         "step_evidence": result.step_evidence or []
@@ -1383,7 +1413,7 @@ def run_script(
         p = Path(inp["path"])
         evidence["inputs"].append({
             "name": inp.get("table"),
-            "path": p.as_posix(),
+            "path": p.name,
             "format": p.suffix.lstrip(".").lower() or "csv",
             "bytes_sha256": compute_raw_hash(p),
             "canonical_sha256": inp.get("sha256")
@@ -1391,7 +1421,7 @@ def run_script(
 
     evidence_path = Path(out_dir) / "runtime.evidence.json"
     evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
-    report["outputs"].append({"path": str(evidence_path), "sha256": compute_artifact_hash(evidence_path)})
+    report["outputs"].append({"path": evidence_path.name, "sha256": compute_artifact_hash(evidence_path)})
 
     report_path = Path(out_dir) / "report.json"
     
@@ -1399,7 +1429,7 @@ def run_script(
     # Find self entry
     self_entry = None
     for o in report["outputs"]:
-        if o["path"] == str(report_path):
+        if o["path"] == report_path.name:
             self_entry = o
             break
     

@@ -100,14 +100,14 @@ def test_hello_multiverse_end_to_end(tmp_path: Path):
     assert len(ae_s_rows) == 3
     dizziness_rows = [r for r in ae_s_rows if r["subjid"] == "102" and r["aeterm"] == "DIZZINESS"]
     assert len(dizziness_rows) == 1
-    assert dizziness_rows[0]["aesev"] == "SEVERE"
+    assert dizziness_rows[0]["aesev"] == "MILD"
 
     with ae_sum_csv.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         sum_rows = list(reader)
 
     assert reader.fieldnames == ["subjid", "aesevn_mean"]
-    expected = {"101": 1.5, "102": 3.0}
+    expected = {"101": 1.5, "102": 1.0}
     assert [row["subjid"] for row in sum_rows] == ["101", "102"]
     for row in sum_rows:
         assert math.isclose(float(row["aesevn_mean"]), expected[row["subjid"]], rel_tol=0.0, abs_tol=1e-6)
