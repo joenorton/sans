@@ -22,41 +22,69 @@ This installs the `sans` CLI command. You can also use `python -m sans`.
 
 ## Quickstart
 
-### 1. Compile and Check
-Verify a script without executing it. Emits the execution plan and a refusal/ok report.
-```bash
-sans check path/to/script.sas --out out_dir --tables in_table
+### 1. Create a pipeline
+`sans` supports a modern `.sans` DSL or a strict SAS‑like subset.
+
+```sans
+# example.sans
+# sans 0.1
+datasource in = csv("data.csv")
+
+table filtered = from(in) do
+  derive do
+    x = a + 1
+    y = x * 2
+  end
+  filter(y > 10)
+end
+
+filtered
 ```
 
-### 2. Execute
-Compile, validate, and run the script. Emits output tables (CSV/XPT) and the final report.
+### 2. Compile and Check
+Verify a script without executing it. Emits the execution plan (`plan.ir.json`) and a refusal/ok report.
 ```bash
-sans run path/to/script.sas --out out_dir --tables source=data.csv --format csv
+sans check example.sans --out out
 ```
 
-### 3. Verify Reproducibility
+### 3. Execute
+Compile, validate, and run. Emits output tables (CSV/XPT) and the final signed manifest.
+```bash
+sans run example.sans --out out
+```
+
+### 4. Verify
 Verify that a previously generated report matches the current state of files on disk.
 ```bash
-sans verify out_dir/report.json
+sans verify out/report.json
 ```
 
 ---
 
 ## Native `.sans` DSL
 
-`sans` includes a native, modern DSL for data pipelines that compiles to the same deterministic IR. Use it to avoid SAS syntax quirks while maintaining full audit parity.
+The native DSL provides a clean, linear syntax for data pipelines. It is safer than SAS, with strict rules for column creation and overwrites.
+
+- **Additive by default**: Use `derive(col = expr)` to create new columns.
+- **Explicit Overwrites**: Use `update! col = expr` to modify existing columns.
+- **Stable Ties**: Sorting is stable; `nodupkey` preserves the first encountered row.
 
 ```sans
-# example.sans
-data target {
-  from source do
-    x = a + 1
-    filter(x > 10)
-    derive! y = x * 2
+# process.sans
+# sans 0.1
+datasource raw = csv("raw.csv")
+
+table enriched = from(raw) do
+  derive(base_val = a + 1)
+  filter(base_val > 0)
+  derive do
+    update! base_val = base_val * 10
+    risk = if(base_val > 100, "HIGH", "LOW")
   end
-}
+end
+
+enriched select subjid, base_val, risk
 ```
-Compile with: `sans check example.sans --out out`
 
 ---
 
