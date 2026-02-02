@@ -87,9 +87,10 @@ table enriched = from(raw) do
   update!(base_val = base_val * 10)
   derive(risk = if(base_val > 100, "HIGH", "LOW"))
   cast(base_val -> str)
+  select(subjid, base_val, risk)
 end
 
-enriched select subjid, base_val, risk
+save enriched to "enriched.csv"
 ```
 
 ---
