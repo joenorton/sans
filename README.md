@@ -28,17 +28,20 @@ This installs the `sans` CLI command. You can also use `python -m sans`.
 ```sans
 # example.sans
 # sans 0.1
-datasource in = csv("data.csv")
 
-table filtered = from(in) do
-  derive do
-    x = a + 1
-    y = x * 2
-  end
-  filter(y > 10)
+datasource in = inline_csv do
+  a,b
+  6,7
+  3,2
 end
 
-filtered
+table t = from(in) do
+  derive(base2 = a * 2)
+  filter(base2 > 10)
+  select a, base2
+end
+
+save t to "out.csv"
 ```
 
 ### 2. Compile and Check
