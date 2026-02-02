@@ -2,11 +2,7 @@
 
 datasource in = csv("in.csv")
 
-let grpfmt = map(
-  "HIGH" -> "High risk",
-  "LOW"  -> "Low risk",
-  _      -> ""
-)
+const { high_label = "High risk", low_label = "Low risk" }
 
 table enriched = from(in) do
   rename(b -> base_b)
@@ -15,14 +11,14 @@ table enriched = from(in) do
     update! c = a * base_b
     risk = if(c > 50, "HIGH", "LOW")
     level = if(risk == "HIGH", 2, 1)
-    risk_label = grpfmt[risk]
+    risk_label = if(risk == "HIGH", high_label, if(risk == "LOW", low_label, ""))
   end
   select a, base_b, c, risk, level, risk_label
 end
 
 table enriched_s = sort(enriched).by(risk, level, c).nodupkey(true)
 
-table stats = summary(enriched_s)
+table stats = aggregate(enriched_s)
   .class(risk, level)
   .var(c)
 

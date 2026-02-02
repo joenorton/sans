@@ -1,0 +1,14 @@
+data out;
+  set in;
+  keep id val;
+  rename val=value;
+  z = value + 1;
+run;
+proc sort data=out out=sorted;
+  by id;
+run;
+proc summary data=sorted nway;
+  class id;
+  var value;
+  output out=agg mean= / autoname;
+run;

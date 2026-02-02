@@ -16,10 +16,12 @@
         "name": "in",
         "path": null,
         "columns": [],
-        "kind": "csv"
+        "kind": "inline_csv",
+        "inline_text": "  a,b\n  6,7\n  3,2\n",
+        "inline_sha256": "a4e9bdec268b4972d200e960fc015dfc8eb8890972a34426a1b98bf66e668e8a"
       },
-      "transform_id": "a7acaaaa90bb910be48824ce74ac80e4918a38bc4897f312cfcc4ea72addbc5c",
-      "step_id": "df56cee2588435b124f5a215e19e3363f906597b2a08c9edeff8bd1627d0b016"
+      "transform_id": "cb8a52534f358d08c1ee8920c22ee5085389ae76ea2514ebefb4032387c619d1",
+      "step_id": "30dc2d0a2c3af82e84dc77a18c9dd3978714072cde323a1930bb50a43568f01e"
     },
     {
       "kind": "op",
@@ -28,7 +30,7 @@
         "line_start": 10,
         "line_end": 10
       },
-      "op": "data_step",
+      "op": "compute",
       "inputs": [
         "__datasource__in"
       ],
@@ -36,15 +38,9 @@
         "__t2__"
       ],
       "params": {
-        "mode": "set",
-        "inputs": [
+        "mode": "derive",
+        "assignments": [
           {
-            "table": "__datasource__in"
-          }
-        ],
-        "statements": [
-          {
-            "type": "assign",
             "target": "base2",
             "expr": {
               "type": "binop",
@@ -57,16 +53,12 @@
                 "type": "lit",
                 "value": 2
               }
-            },
-            "allow_overwrite": false
+            }
           }
-        ],
-        "keep": [],
-        "drop": [],
-        "explicit_output": false
+        ]
       },
-      "transform_id": "d117c05092e984b0ca9989117c370391153bdb04e86796d1c7be910b6e9e2dc7",
-      "step_id": "739ba17f402b5695e8c76dab8f64d3e388a121ee8ee4552a101f55790beb580b"
+      "transform_id": "abc699af5d6b9ca60ea5b4e55d54f30925333859904f1361d57fa06efe3ffa40",
+      "step_id": "38cdfb61a07a3c5f32e50b443d3edffd557ae84c0cf358b1a212c3924dac1da0"
     },
     {
       "kind": "op",
@@ -114,14 +106,13 @@
         "t"
       ],
       "params": {
-        "keep": [
+        "cols": [
           "a",
           "base2"
-        ],
-        "drop": []
+        ]
       },
-      "transform_id": "1d179f60a615b95f9d77153db1c0dbc0f33569c078246007ccaf27d5532466b4",
-      "step_id": "dc5b26fc3ccaefdb80ed4ddfd659a448572111c557d48da566d6603062583643"
+      "transform_id": "c90ed63a589568ec1562a6cb58ad699cf7a5c0b7417fd0654f67951a0adb26c2",
+      "step_id": "9eb4430ce0d6c3c4380e73a8947a6900d70ef6b3d201e356ae7f3b6ac7291b96"
     },
     {
       "kind": "op",
@@ -135,17 +126,16 @@
         "t"
       ],
       "outputs": [
-        "__result__"
+        "__t4__"
       ],
       "params": {
-        "keep": [
+        "cols": [
           "a",
           "base2"
-        ],
-        "drop": []
+        ]
       },
-      "transform_id": "1d179f60a615b95f9d77153db1c0dbc0f33569c078246007ccaf27d5532466b4",
-      "step_id": "48df123c0438a86f76705980006195ee1e946f191db420d12701f17b71d8d07d"
+      "transform_id": "c90ed63a589568ec1562a6cb58ad699cf7a5c0b7417fd0654f67951a0adb26c2",
+      "step_id": "dd2737b664e5ee48a72b719e8f675b1a0fe19b7a361415a3d435a0f09e16d3dc"
     }
   ],
   "tables": [
@@ -164,7 +154,7 @@
     "t": {
       "sorted_by": null
     },
-    "__result__": {
+    "__t4__": {
       "sorted_by": null
     }
   },

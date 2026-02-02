@@ -16,7 +16,7 @@ out
 """
     irdoc = compile_sans_script(script, "test.sans", tables={"in"})
     # Check IR lowering
-    summary_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "summary")
+    summary_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "aggregate")
     assert summary_step.params["vars"] == ["x", "y"]
     assert summary_step.params["stats"] == ["mean"]
     
@@ -68,7 +68,7 @@ out
 """
     irdoc = compile_sans_script(script, "test.sans", tables={"in"})
     assert not any(isinstance(s, UnknownBlockStep) and s.severity == "fatal" for s in irdoc.steps)
-    summary_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "summary")
+    summary_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "aggregate")
     assert summary_step.params["stats"] == ["mean", "sum"]
 
 def test_demo_sans_semantic_acceptance():

@@ -1,3 +1,4 @@
+import copy
 import json
 import shutil
 import sys
@@ -115,4 +116,97 @@ def test_hello_verify(tmp_path):
     # will differ from `old_hash`.
     ret = main(["verify", str(report_path)])
     assert ret == 1
-    
+
+
+def test_run_writes_expanded_sans_and_stable(tmp_path):
+    """sans run writes expanded.sans to out dir; it is in report outputs and stable across runs."""
+    script_content = "data out; set input; z = x + y; run;"
+    script_path = tmp_path / "script.sas"
+    script_path.write_text(script_content, encoding="utf-8")
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
+    out_dir_1 = tmp_path / "out1"
+    out_dir_2 = tmp_path / "out2"
+
+    ret1 = main(["run", str(script_path), "--out", str(out_dir_1), "--tables", f"input={input_path}"])
+    assert ret1 == 0
+    expanded_path_1 = out_dir_1 / "expanded.sans"
+    assert expanded_path_1.exists(), "run must write expanded.sans"
+    content_1 = expanded_path_1.read_text(encoding="utf-8")
+
+    ret2 = main(["run", str(script_path), "--out", str(out_dir_2), "--tables", f"input={input_path}"])
+    assert ret2 == 0
+    expanded_path_2 = out_dir_2 / "expanded.sans"
+    assert expanded_path_2.exists()
+    content_2 = expanded_path_2.read_text(encoding="utf-8")
+    assert content_1 == content_2, "expanded.sans must be stable across runs (same inputs)"
+
+    # Verify(dir) checks expanded.sans like other outputs (non-null sha256)
+    ret = main(["verify", str(out_dir_1)])
+    assert ret == 0
+    report = json.loads((out_dir_1 / "report.json").read_text(encoding="utf-8"))
+    output_paths = [o["path"] for o in report.get("outputs", [])]
+    assert "expanded.sans" in output_paths
+    expanded_entry = next(o for o in report["outputs"] if o["path"] == "expanded.sans")
+    assert expanded_entry.get("sha256") is not None
+
+
+def test_verify_whitespace_invariance(tmp_path):
+    """Verify passes when report.json is rewritten with different indentation or key order.
+    We hash the canonical payload (parsed + canonicalize), not file bytes."""
+    script_content = "data out; set input; z = x + y; run;"
+    script_path = tmp_path / "script.sas"
+    script_path.write_text(script_content, encoding="utf-8")
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}"])
+    assert ret == 0
+
+    report_path = out_dir / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report.get("report_sha256")
+
+    # Rewrite with different indent (no indent) — same semantic content
+    report_path.write_text(json.dumps(report, separators=(",", ":")), encoding="utf-8")
+    ret = main(["verify", str(report_path)])
+    assert ret == 0
+
+    # Rewrite with different indent and key order (no sort_keys)
+    report_path.write_text(json.dumps(report, indent=4), encoding="utf-8")
+    ret = main(["verify", str(report_path)])
+    assert ret == 0
+
+
+def test_verify_path_normalization_invariance(tmp_path):
+    """Verify passes when paths in report use backslashes vs slashes; canonicalize normalizes to posix."""
+    script_content = "data out; set input; z = x + y; run;"
+    script_path = tmp_path / "script.sas"
+    script_path.write_text(script_content, encoding="utf-8")
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}"])
+    assert ret == 0
+
+    report_path = out_dir / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report.get("report_sha256")
+
+    # Rewrite paths with backslashes (Windows-style)
+    def backslash_paths(obj):
+        if isinstance(obj, dict):
+            return {k: backslash_paths(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [backslash_paths(x) for x in obj]
+        if isinstance(obj, str) and ("/" in obj or "\\" in obj):
+            return obj.replace("/", "\\")
+        return obj
+
+    report_bs = backslash_paths(copy.deepcopy(report))
+    report_path.write_text(json.dumps(report_bs, indent=2), encoding="utf-8")
+    ret = main(["verify", str(report_path)])
+    assert ret == 0
+

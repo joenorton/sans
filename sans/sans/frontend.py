@@ -178,7 +178,19 @@ def detect_refusal(text: str, file_name: str = "<string>") -> Optional[Refusal]:
     """
     v0.1 refusal detector: reject known-dangerous constructs early.
     byte-accurate line numbers: counts physical newlines in text.
+    See docs/SAS_INGESTION_CONTRACT.md for policy.
     """
+    import re
+    lines = text.splitlines()
+    for line_no, line in enumerate(lines, 1):
+        stripped = line.strip()
+        # Graph-mutating macro: %if / %then / %else (conditional compilation)
+        if re.search(r"%\s*if\s+", stripped, re.IGNORECASE):
+            return Refusal(
+                code="SANS_REFUSAL_MACRO_GRAPH",
+                message="Macro %if/%then/%else that changes graph shape is not allowed; static DAG only.",
+                loc=Loc(file_name, line_no, line_no),
+            )
     return None
 
 def segment_blocks(statements: list[Statement]) -> list[Block]:

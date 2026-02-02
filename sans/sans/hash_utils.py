@@ -1,7 +1,9 @@
 import hashlib
+import json
+import copy
 import csv
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 def _sha256_text(text: str) -> str:
     # Normalize line endings to \n before hashing
@@ -84,3 +86,60 @@ def compute_artifact_hash(path: Path) -> Optional[str]:
         return hashlib.sha256(data).hexdigest()
     except OSError:
         return None
+
+
+def _normalize_path(path_val: str, bundle_root: Path) -> str:
+    """Normalize path to posix, relative to bundle_root if under it; else posix (for determinism)."""
+    p = Path(path_val)
+    if not p.is_absolute():
+        p = (bundle_root / p).resolve()
+    else:
+        p = p.resolve()
+    bundle = bundle_root.resolve()
+    try:
+        rel = p.relative_to(bundle)
+        return rel.as_posix()
+    except ValueError:
+        return p.as_posix()
+
+
+def canonicalize_report(report: Dict[str, Any], bundle_root: Path) -> Dict[str, Any]:
+    """
+    Produce a deep copy of report suitable for deterministic hashing.
+    - Removes report_sha256 (and report.json output entry sha256).
+    - Normalizes all paths to posix, relative to bundle_root when under it.
+    - Sorts outputs and inputs by path.
+    - Clears report.json output entry sha256 in the copy so hash does not depend on file content.
+    """
+    out = copy.deepcopy(report)
+    bundle = Path(bundle_root).resolve()
+
+    out.pop("report_sha256", None)
+
+    if "plan_path" in out and out["plan_path"]:
+        out["plan_path"] = _normalize_path(str(out["plan_path"]), bundle)
+
+    for inp in out.get("inputs", []):
+        if inp.get("path"):
+            inp["path"] = _normalize_path(str(inp["path"]), bundle)
+
+    report_json_name = "report.json"
+    for o in out.get("outputs", []):
+        if o.get("path"):
+            o["path"] = _normalize_path(str(o["path"]), bundle)
+            if o["path"] == report_json_name or o["path"].endswith("/report.json"):
+                o["sha256"] = None
+
+    if "outputs" in out:
+        out["outputs"] = sorted(out["outputs"], key=lambda x: (x.get("path") or ""))
+    if "inputs" in out:
+        out["inputs"] = sorted(out["inputs"], key=lambda x: (x.get("path") or ""))
+
+    return out
+
+
+def compute_report_sha256(report: Dict[str, Any], bundle_root: Path) -> str:
+    """SHA-256 of canonical report payload: json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False)."""
+    canonical = canonicalize_report(report, bundle_root)
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

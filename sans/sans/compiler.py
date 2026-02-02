@@ -21,7 +21,7 @@ from .sans_script.ast import DatasourceDeclaration # New import
 from . import __version__ as _engine_version
 
 
-from .hash_utils import compute_artifact_hash, _sha256_text
+from .hash_utils import compute_artifact_hash, _sha256_text, compute_report_sha256
 from .sans_script import SansScriptError, lower_script, parse_sans_script
 from .sans_script.canon import compute_step_id, compute_transform_id
 
@@ -120,7 +120,27 @@ def compile_script(
         
     """
     
-    # 0. Macro Preprocessing
+    # 0. Refuse known-dangerous constructs before any preprocessing (SAS ingestion contract)
+    refusal = detect_refusal(text, file_name)
+    if refusal:
+        tf_objects = {}
+        if initial_table_facts:
+            for table_name, facts_dict in initial_table_facts.items():
+                tf_objects[table_name] = TableFact(**facts_dict)
+        table_set = set(tables) if tables else set()
+        return IRDoc(
+            steps=[
+                UnknownBlockStep(
+                    code=refusal.code,
+                    message=refusal.message,
+                    loc=refusal.loc,
+                )
+            ],
+            tables=table_set,
+            table_facts=tf_objects,
+        )
+
+    # 1. Macro Preprocessing
     try:
         text = preprocess_text(
             text,
@@ -140,25 +160,6 @@ def compile_script(
             )
         ])
 
-    # 1. detect_refusal() - Early exit for known dangerous constructs
-    refusal = detect_refusal(text, file_name)
-    if refusal:
-        steps: list[Step] = [
-            UnknownBlockStep(
-                code=refusal.code,
-                message=refusal.message,
-                loc=refusal.loc,
-            )
-        ]
-        # Convert initial_table_facts dict to TableFact objects
-        tf_objects: Dict[str, TableFact] = {}
-        if initial_table_facts:
-            for table_name, facts_dict in initial_table_facts.items():
-                tf_objects[table_name] = TableFact(**facts_dict)
-        if tables is None:
-            return IRDoc(steps=steps, table_facts=tf_objects)
-        return IRDoc(steps=steps, tables=tables, table_facts=tf_objects)
-        
     # 2. split_statements()
     statements = list(split_statements(text, file_name))
     
@@ -482,10 +483,7 @@ def emit_check_artifacts(
         },
     }
 
+    report["report_sha256"] = compute_report_sha256(report, out_path)
+    report["outputs"][1]["sha256"] = None
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    report_sha = compute_artifact_hash(report_path)
-    if report_sha:
-        report["outputs"][1]["sha256"] = report_sha
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-
     return irdoc, report

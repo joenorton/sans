@@ -98,5 +98,5 @@ def test_check_script_happy_path_with_multiple_steps():
     assert irdoc.steps[1].op == "sort"
     assert irdoc.steps[1].inputs == ["temp_data"]
     assert irdoc.steps[1].outputs == ["final_data"]
-    assert irdoc.steps[1].params == {"by": [{"col": "id", "asc": True}]}
+    assert irdoc.steps[1].params == {"by": [{"col": "id", "desc": False}]}
     assert irdoc.steps[1].loc == Loc("test.sas", 4, 6)

@@ -9,7 +9,8 @@ from time import perf_counter
 
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
 from .compiler import emit_check_artifacts
-from .hash_utils import compute_artifact_hash, compute_raw_hash
+from .hash_utils import compute_artifact_hash, compute_raw_hash, compute_report_sha256
+from .sans_script import irdoc_to_expanded_sans
 from .sans_script.canon import compute_step_id, compute_transform_id
 from .xpt import load_xpt_with_warnings, dump_xpt, XptError
 from . import __version__ as _engine_version
@@ -93,11 +94,10 @@ def _sort_key_value(value: Any) -> tuple[int, Any]:
 
 
 def _normalize_sort_by(by_spec: Any) -> list[tuple[str, bool]]:
+    """Expect canonical list[{"col": str, "desc": bool}] from IR. Returns [(col, asc), ...] for internal use."""
     if not by_spec:
         return []
-    if isinstance(by_spec, list) and by_spec and isinstance(by_spec[0], dict):
-        return [(item.get("col"), bool(item.get("asc", True))) for item in by_spec]
-    return [(col, True) for col in by_spec]
+    return [(item["col"], not item.get("desc", False)) for item in by_spec]
 
 
 def _sort_rows(rows: List[Dict[str, Any]], by_spec: Any, nodupkey: bool = False) -> List[Dict[str, Any]]:
@@ -390,6 +390,64 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
         "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
         f"Unsupported expression node type '{node_type}'",
     )
+
+
+def _eval_expr_assert(
+    node: Dict[str, Any],
+    tables: Dict[str, List[Dict[str, Any]]],
+    formats: Optional[Dict[str, Dict[str, Any]]],
+) -> Any:
+    """Evaluate an assert predicate with access to tables (e.g. row_count(t))."""
+    node_type = node.get("type")
+    if node_type == "lit":
+        return node.get("value")
+    if node_type == "col":
+        # In assert context there is no row; column refs evaluate to None (e.g. for comparison).
+        return _eval_expr(node, {}, formats)
+    if node_type == "call":
+        name = node.get("name")
+        args = node.get("args") or []
+        if name == "row_count" and len(args) == 1:
+            arg = args[0]
+            if isinstance(arg, dict) and arg.get("type") == "lit":
+                table_name = str(arg.get("value", ""))
+                return len(tables.get(table_name, []))
+            if isinstance(arg, dict) and arg.get("type") == "col":
+                table_name = str(arg.get("name", ""))
+                return len(tables.get(table_name, []))
+        # Delegate to _eval_expr with empty row for other calls (if, put, etc.).
+        return _eval_expr(node, {}, formats)
+    if node_type == "binop":
+        op = node.get("op")
+        left = _eval_expr_assert(node.get("left"), tables, formats)
+        right = _eval_expr_assert(node.get("right"), tables, formats)
+        if op in {"=", "!=", "<", "<=", ">", ">="}:
+            return _compare_sas(left, right, op)
+        if op in {"+", "-", "*", "/"}:
+            if left is None or right is None:
+                return None
+            if op == "+": return left + right
+            if op == "-": return left - right
+            if op == "*": return left * right
+            if op == "/": return left / right if right else None
+        raise RuntimeFailure("SANS_RUNTIME_UNSUPPORTED_EXPR_NODE", f"Unsupported binop '{op}'", {})
+    if node_type == "boolop":
+        op = node.get("op")
+        args = node.get("args") or []
+        if op == "and":
+            return all(bool(_eval_expr_assert(a, tables, formats)) for a in args)
+        if op == "or":
+            return any(bool(_eval_expr_assert(a, tables, formats)) for a in args)
+        raise RuntimeFailure("SANS_RUNTIME_UNSUPPORTED_EXPR_NODE", f"Unsupported boolop '{op}'", {})
+    if node_type == "unop":
+        op = node.get("op")
+        arg = _eval_expr_assert(node.get("arg"), tables, formats)
+        if op == "not":
+            return not bool(arg)
+        if op in ("+", "-"):
+            return +arg if op == "+" else (-arg if arg is not None else None)
+        raise RuntimeFailure("SANS_RUNTIME_UNSUPPORTED_EXPR_NODE", f"Unsupported unop '{op}'", {})
+    return _eval_expr(node, {}, formats)
 
 
 def _resolve_sql_column(name: str, row: Dict[str, Any], col_map: Dict[str, list[str]]) -> Any:
@@ -984,19 +1042,17 @@ def _execute_sql_select(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -
     return output_rows
 
 
-def _execute_summary(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def _execute_aggregate(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     params = step.params or {}
-    class_vars = params.get("class") or []
-    var_vars = params.get("vars") or []
-    # stats might be missing in older IR, default to mean
-    stats = params.get("stats", ["mean"])
+    group_by = params.get("group_by") or []
+    metrics = params.get("metrics") or []
 
     input_table = step.inputs[0]
     input_rows = tables.get(input_table, [])
 
     groups: Dict[tuple[Any, ...], List[Dict[str, Any]]] = {}
     for row in input_rows:
-        key = tuple(row.get(col) for col in class_vars)
+        key = tuple(row.get(col) for col in group_by)
         groups.setdefault(key, []).append(row)
 
     def group_sort_key(key: tuple[Any, ...]):
@@ -1005,17 +1061,25 @@ def _execute_summary(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) -> L
     outputs: List[Dict[str, Any]] = []
     for key in sorted(groups.keys(), key=group_sort_key):
         rows = groups[key]
-        # Order: all class keys, then aggregate columns
-        out_row: Dict[str, Any] = {col: key[idx] for idx, col in enumerate(class_vars)}
-        for var in var_vars:
-            for stat in stats:
-                if stat == "mean":
-                    values = [r.get(var) for r in rows if r.get(var) is not None]
-                    val = (sum(values) / len(values)) if values else None
-                else:
-                    # In future, handle other stats
-                    val = None
-                out_row[f"{var}_{stat}"] = val
+        out_row: Dict[str, Any] = {col: key[idx] for idx, col in enumerate(group_by)}
+        for m in metrics:
+            name = m.get("name", "")
+            op = m.get("op", "mean")
+            col = m.get("col", "")
+            if op == "mean":
+                values = [r.get(col) for r in rows if r.get(col) is not None]
+                val = (sum(values) / len(values)) if values else None
+            elif op == "sum":
+                values = [r.get(col) for r in rows if r.get(col) is not None]
+                val = sum(values) if values else None
+            elif op in ("min", "max"):
+                values = [r.get(col) for r in rows if r.get(col) is not None]
+                val = (min(values) if op == "min" else max(values)) if values else None
+            elif op in ("count", "n"):
+                val = len(rows)
+            else:
+                val = None
+            out_row[name] = val
         outputs.append(out_row)
     return outputs
 
@@ -1062,14 +1126,14 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                 )
 
             op = step.op
-            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose", "sql_select", "format", "summary"}:
+            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "data_step", "transpose", "sql_select", "format", "aggregate", "summary", "save", "assert", "let_scalar", "const"}:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
                     f"Unsupported operation '{op}'",
                     _loc_to_dict(step.loc),
                 )
 
-            if not step.inputs and op != "format":
+            if not step.inputs and op not in ("format", "assert", "let_scalar", "const"):
                 raise RuntimeFailure(
                     "SANS_RUNTIME_TABLE_UNDEFINED",
                     f"Operation '{op}' has no input table.",
@@ -1092,12 +1156,12 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                 elif op == "sort":
                     output_rows = _sort_rows(input_rows, step.params.get("by"), bool(step.params.get("nodupkey")))
                 elif op == "compute":
-                    assigns = step.params.get("assign") or []
+                    assigns = step.params.get("assignments") or step.params.get("assign") or []
                     output_rows = []
                     for row in input_rows:
                         new_row = dict(row)
                         for assign in assigns:
-                            col_name = assign.get("col")
+                            col_name = assign.get("target") or assign.get("col")
                             expr = assign.get("expr")
                             new_row[col_name] = _eval_expr(expr, new_row, formats)
                         output_rows.append(new_row)
@@ -1109,17 +1173,18 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                         if bool(keep):
                             output_rows.append(dict(row))
                 elif op == "select":
-                    keep = step.params.get("keep") or []
+                    cols = step.params.get("cols") or []
                     drop = step.params.get("drop") or []
                     output_rows = []
                     for row in input_rows:
-                        if keep:
-                            new_row = {k: row.get(k) for k in keep}
+                        if cols:
+                            new_row = {k: row.get(k) for k in cols}
                         else:
                             new_row = {k: v for k, v in row.items() if k not in drop}
                         output_rows.append(new_row)
                 elif op == "rename":
-                    rename_map = step.params.get("map") or {}
+                    mapping = step.params.get("mapping") or []
+                    rename_map = {p["from"]: p["to"] for p in mapping}
                     output_rows = []
                     for row in input_rows:
                         new_row: Dict[str, Any] = {}
@@ -1161,8 +1226,51 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                         "other": step.params.get("other"),
                     }
                     output_rows = []
-                elif op == "summary":
-                    output_rows = _execute_summary(step, tables)
+                elif op in ("aggregate", "summary"):
+                    output_rows = _execute_aggregate(step, tables)
+                elif op == "save":
+                    # Write input table to path (relative to out_dir).
+                    path = step.params.get("path") or ""
+                    name = step.params.get("name")
+                    out_path = out_dir / path if path else out_dir / f"{input_table}.csv"
+                    table_rows = tables.get(input_table, [])
+                    columns = list(table_rows[0].keys()) if table_rows else []
+                    _write_csv(out_path, table_rows)
+                    outputs.append({
+                        "table": name or input_table,
+                        "path": str(out_path),
+                        "rows": len(table_rows),
+                        "columns": columns,
+                    })
+                    t_id = compute_transform_id(op, step.params)
+                    step_evidence.append({
+                        "step_index": step_idx,
+                        "step_id": compute_step_id(t_id, step.inputs, step.outputs),
+                        "transform_id": t_id,
+                        "op": op,
+                        "inputs": list(step.inputs),
+                        "outputs": list(step.outputs),
+                        "row_counts": {input_table: len(table_rows)},
+                    })
+                    continue
+                elif op == "assert":
+                    predicate = step.params.get("predicate")
+                    # Evaluate with empty row; for row_count(t) we need tables - pass via formats placeholder or extend _eval_expr.
+                    result = _eval_expr_assert(predicate, tables, formats)
+                    step_evidence.append({
+                        "step_index": step_idx,
+                        "step_id": compute_step_id(compute_transform_id(op, step.params), step.inputs, step.outputs),
+                        "transform_id": compute_transform_id(op, step.params),
+                        "op": op,
+                        "assert_result": result,
+                    })
+                    continue
+                elif op == "let_scalar":
+                    # No-op at runtime; binding is for compile-time substitution only.
+                    continue
+                elif op == "const":
+                    # No-op at runtime; constants are for compile-time substitution only.
+                    continue
                 else:
                     raise RuntimeFailure(
                         "SANS_CAP_UNSUPPORTED_OP",
@@ -1286,6 +1394,11 @@ def run_script(
         report_path = Path(out_dir) / "report.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report
+
+    # Write expanded.sans (canonical script form from IR) and add to report outputs
+    expanded_path = Path(out_dir) / "expanded.sans"
+    expanded_path.write_text(irdoc_to_expanded_sans(irdoc), encoding="utf-8")
+    report["outputs"].append({"path": expanded_path.name, "sha256": compute_artifact_hash(expanded_path)})
 
     # Populate input hashes
     existing_inputs = {i["path"] for i in report.get("inputs", [])}
@@ -1424,20 +1537,16 @@ def run_script(
     report["outputs"].append({"path": evidence_path.name, "sha256": compute_artifact_hash(evidence_path)})
 
     report_path = Path(out_dir) / "report.json"
-    
-    # Update self-hash for report.json
-    # Find self entry
-    self_entry = None
+    bundle_root = Path(out_dir).resolve()
+
+    # Canonical self-hash: set report_sha256 before writing; report.json output entry stays sha256=None
+    report["report_sha256"] = compute_report_sha256(report, bundle_root)
+    report_path_posix = report_path.as_posix()
     for o in report["outputs"]:
-        if o["path"] == report_path.name:
-            self_entry = o
+        if (o.get("path") == report_path_posix or o.get("path") == report_path.name or
+                (o.get("path") or "").replace("\\", "/").endswith("/report.json")):
+            o["sha256"] = None
             break
-    
-    if self_entry:
-        self_entry["sha256"] = None
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        new_hash = compute_artifact_hash(report_path)
-        self_entry["sha256"] = new_hash
-        
+
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report

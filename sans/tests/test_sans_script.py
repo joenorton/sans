@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 
 from sans.compiler import _irdoc_to_dict, compile_sans_script, UnknownBlockStep
-from sans.ir import IRDoc
+from sans.ir import IRDoc, OpStep
+from sans.sans_script import irdoc_to_expanded_sans
 
 
 FIXTURE = Path("sans/tests/fixtures/hello.sans")
@@ -51,6 +52,274 @@ def test_sans_script_deterministic_plan():
     first = _compile_script(FIXTURE.read_text(encoding="utf-8"))
     second = _compile_script(FIXTURE.read_text(encoding="utf-8"))
     assert first == second
+
+
+def test_expanded_sans_round_trip_byte():
+    """expanded.sans → IR → expanded.sans is byte-identical."""
+    text = FIXTURE.read_text(encoding="utf-8")
+    irdoc = compile_sans_script(text, str(FIXTURE), tables={"lb"})
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    irdoc2 = compile_sans_script(expanded, "expanded.sans", tables=set())
+    assert not any(
+        isinstance(s, UnknownBlockStep) and getattr(s, "severity", "") == "fatal"
+        for s in irdoc2.steps
+    ), "expanded.sans should compile without fatal errors"
+    validated2 = IRDoc(
+        steps=irdoc2.steps,
+        tables=irdoc2.tables,
+        table_facts=irdoc2.table_facts,
+        datasources=irdoc2.datasources,
+    ).validate()
+    irdoc2 = IRDoc(
+        steps=irdoc2.steps,
+        tables=irdoc2.tables,
+        table_facts=validated2,
+        datasources=irdoc2.datasources,
+    )
+    expanded2 = irdoc_to_expanded_sans(irdoc2)
+    assert expanded == expanded2, "expanded.sans → IR → expanded.sans should be byte-identical"
+
+
+def test_expanded_sans_never_emits_summary():
+    """expanded.sans printer must NEVER emit 'summary'; canonical op name is 'aggregate'."""
+    text = FIXTURE.read_text(encoding="utf-8")
+    irdoc = compile_sans_script(text, str(FIXTURE), tables={"lb"})
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    assert "summary" not in expanded, "expanded.sans must not contain 'summary'; use 'aggregate'"
+
+
+def test_sort_by_normalized_to_canonical_in_validation():
+    """Feeding legacy shapes (list[str] or list[dict] with asc) into validate() yields canonical by=[{"col", "desc"} only."""
+    from sans._loc import Loc
+    from sans.ir import DatasourceDecl, TableFact
+
+    # Legacy list[str] -> canonical [{"col": s, "desc": False}, ...]
+    step_legacy_str = OpStep(
+        op="sort",
+        inputs=["__datasource__raw"],
+        outputs=["s1"],
+        params={"by": ["a", "b"]},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc_str = IRDoc(
+        steps=[step_legacy_str],
+        tables=set(),
+        table_facts={},
+        datasources={"raw": DatasourceDecl(kind="csv", path="x")},
+    )
+    irdoc_str.validate()
+    assert step_legacy_str.params["by"] == [{"col": "a", "desc": False}, {"col": "b", "desc": False}]
+
+    # list[dict] with "asc" -> canonical {"col", "desc"} (no "asc" in output)
+    step_legacy_asc = OpStep(
+        op="sort",
+        inputs=["t0"],
+        outputs=["s2"],
+        params={"by": [{"col": "x", "asc": True}, {"col": "y", "asc": False}], "nodupkey": False},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc_asc = IRDoc(steps=[step_legacy_asc], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
+    irdoc_asc.validate()
+    assert step_legacy_asc.params["by"] == [{"col": "x", "desc": False}, {"col": "y", "desc": True}]
+
+
+def test_expanded_sans_sort_by_dict_keys_deterministic():
+    """expanded.sans printer assumes canonical list[{"col", "desc"}]; emits by(col1, -col2)."""
+    from sans._loc import Loc
+    from sans.ir import DatasourceDecl, TableFact
+    # Canonical after validate(): by=[{"col": "a", "desc": False}]
+    step = OpStep(
+        op="sort",
+        inputs=["__datasource__raw"],
+        outputs=["s1"],
+        params={"by": [{"col": "a", "desc": False}], "nodupkey": False},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc = IRDoc(
+        steps=[step],
+        tables=set(),
+        table_facts={},
+        datasources={"raw": DatasourceDecl(kind="csv", path="x")},
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    assert "sort(" in expanded
+    assert "by(a)" in expanded
+    # Desc: by=[{"col": "x", "desc": True}, {"col": "y", "desc": False}]
+    step2 = OpStep(
+        op="sort",
+        inputs=["t0"],
+        outputs=["s2"],
+        params={"by": [{"col": "x", "desc": True}, {"col": "y", "desc": False}], "nodupkey": False},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc2 = IRDoc(steps=[step2], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
+    expanded2 = irdoc_to_expanded_sans(irdoc2)
+    assert "by(-x, y)" in expanded2
+
+
+def test_select_rename_aggregate_normalized_to_canonical_in_validation():
+    """Legacy shapes for select, rename, aggregate normalize to canonical in validate()."""
+    from sans._loc import Loc
+    from sans.ir import DatasourceDecl, TableFact
+
+    # Select: legacy keep -> cols; legacy drop -> drop
+    step_keep = OpStep(
+        op="select",
+        inputs=["t0"],
+        outputs=["s1"],
+        params={"keep": ["a", "b"]},
+        loc=Loc("test.sas", 1, 1),
+    )
+    step_drop = OpStep(
+        op="select",
+        inputs=["t0"],
+        outputs=["s2"],
+        params={"drop": ["x"]},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc = IRDoc(
+        steps=[step_keep, step_drop],
+        tables={"t0"},
+        table_facts={"t0": TableFact()},
+        datasources={},
+    )
+    irdoc.validate()
+    assert step_keep.params.get("cols") == ["a", "b"]
+    assert "keep" not in step_keep.params
+    assert step_drop.params.get("drop") == ["x"]
+    assert "cols" not in step_drop.params
+
+    # Rename: legacy dict -> mapping list (sorted by "from")
+    step_rename = OpStep(
+        op="rename",
+        inputs=["t0"],
+        outputs=["s3"],
+        params={"map": {"b": "B", "a": "A"}},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc2 = IRDoc(steps=[step_rename], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
+    irdoc2.validate()
+    assert step_rename.params["mapping"] == [{"from": "a", "to": "A"}, {"from": "b", "to": "B"}]
+    assert "map" not in step_rename.params
+
+    # Aggregate: legacy class/var/stats -> group_by + metrics
+    step_agg = OpStep(
+        op="aggregate",
+        inputs=["t0"],
+        outputs=["s4"],
+        params={"class": ["g"], "var": ["x"], "stats": ["mean"]},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc3 = IRDoc(steps=[step_agg], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
+    irdoc3.validate()
+    assert step_agg.params["group_by"] == ["g"]
+    assert step_agg.params["metrics"] == [{"name": "x_mean", "op": "mean", "col": "x"}]
+    assert "class" not in step_agg.params
+    assert "var" not in step_agg.params
+    assert "stats" not in step_agg.params
+
+
+def test_expanded_sans_select_rename_aggregate_canonical_output():
+    """expanded.sans emits deterministic canonical syntax for select, rename, aggregate."""
+    from sans._loc import Loc
+    from sans.ir import DatasourceDecl, TableFact
+
+    steps = [
+        OpStep(
+            op="select",
+            inputs=["__datasource__r"],
+            outputs=["s1"],
+            params={"cols": ["a", "b"]},
+            loc=Loc("t.sas", 1, 1),
+        ),
+        OpStep(
+            op="rename",
+            inputs=["s1"],
+            outputs=["s2"],
+            params={"mapping": [{"from": "a", "to": "A"}, {"from": "b", "to": "B"}]},
+            loc=Loc("t.sas", 1, 1),
+        ),
+        OpStep(
+            op="aggregate",
+            inputs=["s2"],
+            outputs=["s3"],
+            params={"group_by": ["A"], "metrics": [{"name": "B_mean", "op": "mean", "col": "B"}]},
+            loc=Loc("t.sas", 1, 1),
+        ),
+    ]
+    irdoc = IRDoc(steps=steps, tables=set(), table_facts={}, datasources={"r": DatasourceDecl(kind="csv", path="x")})
+    expanded = irdoc_to_expanded_sans(irdoc)
+    assert "select a, b" in expanded
+    assert "rename(a -> A, b -> B)" in expanded
+    assert "aggregate(" in expanded
+    assert "class(A)" in expanded
+    assert "var(B)" in expanded
+    assert "stats(mean)" in expanded
+
+
+def test_expanded_sans_round_trip_semantic():
+    """IR → expanded.sans → IR is semantically identical (same ops, inputs, outputs, params)."""
+    text = FIXTURE.read_text(encoding="utf-8")
+    irdoc = compile_sans_script(text, str(FIXTURE), tables={"lb"})
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    irdoc2 = compile_sans_script(expanded, "expanded.sans", tables=set())
+    validated2 = IRDoc(
+        steps=irdoc2.steps,
+        tables=irdoc2.tables,
+        table_facts=irdoc2.table_facts,
+        datasources=irdoc2.datasources,
+    ).validate()
+    irdoc2 = IRDoc(
+        steps=irdoc2.steps,
+        tables=irdoc2.tables,
+        table_facts=validated2,
+        datasources=irdoc2.datasources,
+    )
+    # Compare steps (op, inputs, outputs, params) ignoring step_id/transform_id
+    steps1 = [s for s in irdoc.steps if hasattr(s, "op")]
+    steps2 = [s for s in irdoc2.steps if hasattr(s, "op")]
+    assert len(steps1) == len(steps2)
+    for s1, s2 in zip(steps1, steps2):
+        assert s1.op == s2.op
+        assert s1.inputs == s2.inputs
+        assert s1.outputs == s2.outputs
+        assert s1.params == s2.params
 
 
 def test_missing_header_refused():

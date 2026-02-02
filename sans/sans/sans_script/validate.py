@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Union, Any
 from .ast import (
-    SansScript, SansScriptStmt, LetBinding, TableBinding, TableExpr,
+    SansScript, SansScriptStmt, LetBinding, ConstDecl, TableBinding, TableExpr,
     FromExpr, TableNameExpr, PipelineExpr, PostfixExpr, BuilderExpr,
-    TableTransform, MapExpr, DatasourceDeclaration
+    TableTransform, DatasourceDeclaration, SaveStmt, AssertStmt,
 )
 from .errors import SansScriptError
+
+
+def _is_const_literal(val: Any) -> bool:
+    """True if val is an allowed const literal: int, str, bool, or None (null)."""
+    return val is None or isinstance(val, (int, str, bool))
 
 
 class SemanticValidator:
@@ -39,12 +44,20 @@ class SemanticValidator:
     def _validate_stmt(self, stmt: SansScriptStmt):
         if isinstance(stmt, LetBinding):
             self._check_kind_lock(stmt.name, 'scalar', stmt.span.start)
-            if isinstance(stmt.expr, MapExpr):
-                self._validate_map_expr(stmt.expr)
-            else:
-                self._validate_scalar_expr(stmt.expr, stmt.span.start)
+            self._validate_scalar_expr(stmt.expr, stmt.span.start)
             self.scalars[stmt.name] = stmt.span.start
             self.kinds[stmt.name] = 'scalar'
+        elif isinstance(stmt, ConstDecl):
+            for name, val in stmt.bindings.items():
+                self._check_kind_lock(name, 'scalar', stmt.span.start)
+                if not _is_const_literal(val):
+                    raise SansScriptError(
+                        code="E_BAD_EXPR",
+                        message=f"const allows only int, string, bool, null; got {type(val).__name__}.",
+                        line=stmt.span.start,
+                    )
+                self.scalars[name] = stmt.span.start
+                self.kinds[name] = 'scalar'
         elif isinstance(stmt, DatasourceDeclaration):
             self._check_kind_lock(stmt.name, 'datasource', stmt.span.start)
             if stmt.name in self.datasources:
@@ -62,6 +75,15 @@ class SemanticValidator:
             if schema is not None:
                 self.table_schemas[stmt.name] = schema
             self.kinds[stmt.name] = 'table'
+        elif isinstance(stmt, SaveStmt):
+            if stmt.table not in self.tables:
+                raise SansScriptError(
+                    code="E_UNDEFINED_TABLE",
+                    message=f"Save references table '{stmt.table}' which is not defined.",
+                    line=stmt.span.start,
+                )
+        elif isinstance(stmt, AssertStmt):
+            self._validate_scalar_expr(stmt.predicate, stmt.span.start, None)
 
     def _check_kind_lock(self, name: str, kind: str, line: int):
         if name in self.kinds and self.kinds[name] != kind:
@@ -115,7 +137,7 @@ class SemanticValidator:
                         line=expr.span.start
                     )
                 return None # Schema unchanged
-            elif expr.kind == "summary":
+            elif expr.kind in ("summary", "aggregate"):
                 class_cols = expr.config.get("class", [])
                 var_cols = expr.config.get("var", [])
                 stats = expr.config.get("stats", ["mean"])
@@ -159,7 +181,7 @@ class SemanticValidator:
         elif kind == "filter":
             self._validate_scalar_expr(params["predicate"], line, schema)
             return schema
-        elif kind == "derive":
+        elif kind in ("derive", "update!"):
             # Rule: Sequential evaluation, no cycles, no implicit overwrites
             # We track "new" columns created in this derive block
             new_schema = list(schema) if schema is not None else [] # Start with empty schema if unknown

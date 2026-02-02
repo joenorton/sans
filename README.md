@@ -66,8 +66,11 @@ sans verify out/report.json
 The native DSL provides a clean, linear syntax for data pipelines. It is safer than SAS, with strict rules for column creation and overwrites.
 
 - **Additive by default**: Use `derive(col = expr)` to create new columns.
-- **Explicit Overwrites**: Use `update! col = expr` to modify existing columns.
+- **Explicit Overwrites**: Use `update!(col = expr)` to modify existing columns.
+- **Explicit output**: Outputs are defined only via **save**; there is no implicit "last table wins."
 - **Stable Ties**: Sorting is stable; `nodupkey` preserves the first encountered row.
+
+**expanded.sans** is the canonical human-readable form (fully explicit, no blocks, kernel vocabulary only); scripts are sugar that lower to the same IR.
 
 ```sans
 # process.sans

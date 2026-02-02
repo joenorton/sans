@@ -1709,9 +1709,9 @@ def recognize_proc_summary_block(block: Block) -> OpStep | UnknownBlockStep:
         )
 
     return OpStep(
-        op="summary",
+        op="aggregate",
         inputs=[input_table],
         outputs=[output_table],
-        params={"class": class_vars, "vars": var_vars, "stat": "mean", "autoname": True},
+        params={"class": class_vars, "vars": var_vars, "stats": ["mean"], "autoname": True},
         loc=block.loc_span,
     )

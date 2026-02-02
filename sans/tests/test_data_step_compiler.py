@@ -47,7 +47,7 @@ class TestDataStepCompiler:
         assert select_step.op == "select"
         assert select_step.inputs == ["in_table"]
         assert select_step.outputs == ["out_table"]
-        assert select_step.params == {"keep": ["col1", "col2"], "drop": []}
+        assert select_step.params == {"cols": ["col1", "col2"]}
         assert select_step.loc == L("test.sas", 2, 5)
 
     def test_data_step_with_drop(self):
@@ -66,7 +66,7 @@ class TestDataStepCompiler:
         assert select_step.op == "select"
         assert select_step.inputs == ["in_table"]
         assert select_step.outputs == ["out_table"]
-        assert select_step.params == {"keep": [], "drop": ["colA", "colB"]}
+        assert select_step.params == {"drop": ["colA", "colB"]}
         assert select_step.loc == L("test.sas", 2, 5)
 
     def test_data_step_with_rename(self):
@@ -85,7 +85,7 @@ class TestDataStepCompiler:
         assert rename_step.op == "rename"
         assert rename_step.inputs == ["in_table"]
         assert rename_step.outputs == ["out_table"]
-        assert rename_step.params == {"map": {"old1": "new1", "old2": "new2"}}
+        assert rename_step.params == {"mapping": [{"from": "old1", "to": "new1"}, {"from": "old2", "to": "new2"}]}
         assert rename_step.loc == L("test.sas", 2, 5)
 
     def test_data_step_with_assignments(self):
@@ -227,7 +227,7 @@ class TestDataStepCompiler:
         assert select_step.op == "select"
         assert select_step.inputs == [filter_step.outputs[0]]
         assert select_step.outputs == ["final_out"] # Final output
-        assert select_step.params == {"keep": ["colX", "colY"], "drop": []}
+        assert select_step.params == {"cols": ["colX", "colY"]}
         assert select_step.loc == L("test.sas", 2, 8)
 
     # --- Forbidden Token Checks ---
@@ -472,7 +472,7 @@ class TestDataStepCompiler:
         assert sort_step.op == "sort"
         assert sort_step.inputs == ["temp"]
         assert sort_step.outputs == ["sorted_temp"]
-        assert sort_step.params == {"by": [{"col": "x", "asc": True}]}
+        assert sort_step.params == {"by": [{"col": "x", "desc": False}]}
         
 class TestSortednessFacts:
 

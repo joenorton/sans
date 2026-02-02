@@ -7,7 +7,9 @@ from sans.expr import ExprNode
 from sans.parser_expr import parse_expression_from_string, tokenize
 
 from .ast import (
+    AssertStmt,
     BuilderExpr,
+    ConstDecl,
     FromExpr,
     LetBinding,
     MapEntry,
@@ -16,12 +18,13 @@ from .ast import (
     PostfixExpr,
     SansScript,
     SansScriptStmt,
+    SaveStmt,
     SourceSpan,
     TableBinding,
     TableExpr,
     TableNameExpr,
     TableTransform,
-    DatasourceDeclaration, # New import
+    DatasourceDeclaration,
 )
 from .errors import SansScriptError
 
@@ -127,17 +130,27 @@ class SansScriptParser:
                 stmt = self._parse_table_binding(line)
                 statements.append(stmt)
                 span_end = max(span_end, stmt.span.end)
+            elif line.stripped.lower().startswith("save "):
+                stmt = self._parse_save_stmt(line)
+                statements.append(stmt)
+                span_end = max(span_end, stmt.span.end)
+            elif line.stripped.lower().startswith("assert "):
+                stmt = self._parse_assert_stmt(line)
+                statements.append(stmt)
+                span_end = max(span_end, stmt.span.end)
+            elif line.stripped.lower().startswith("const "):
+                stmt = self._parse_const_decl(line)
+                statements.append(stmt)
+                span_end = max(span_end, stmt.span.end)
             else:
-                # This must be the terminal table expression.
-                # It must be the very last content line.
+                # Terminal table expression (optional); must be the very last content line.
                 next_content = self._peek_content_line()
                 if next_content:
                     raise SansScriptError(
                         code="E_PARSE",
-                        message=f"Unexpected statement: '{line.stripped}'. Only let, datasource, and table bindings are supported before the terminal expression.",
+                        message=f"Unexpected statement: '{line.stripped}'. Expected let, const, datasource, table, save, or assert.",
                         line=line.number,
                     )
-                
                 terminal_expr = self._parse_table_expr(line)
                 span_end = max(span_end, terminal_expr.span.end)
                 break
@@ -254,7 +267,7 @@ class SansScriptParser:
         )
 
     def _parse_let_binding(self, line: _Line) -> LetBinding:
-        # let name = <scalar-expr> | map(...)
+        # let name = <scalar-expr> (single scalar only; for multiple literals use const { })
         match = re.match(r"let\s+([a-zA-Z_]\w*)\s*=\s*(.+)", line.stripped, re.IGNORECASE)
         if not match:
             raise SansScriptError(
@@ -265,25 +278,73 @@ class SansScriptParser:
             )
         name = match.group(1).lower()
         rhs = match.group(2).strip()
-
         if rhs.lower().startswith("map("):
-            # Check if it's a multiline map or single line
-            if rhs.lower().endswith(")") or ")" in rhs:
-                # Try parsing as single line first
-                expr = self._parse_map_expr(rhs, line.number)
-                span = SourceSpan(line.number, line.number)
-            else:
-                 # Multiline map
-                body, end_line = self._collect_block_by_parens(line, "map")
-                # Reconstruct RHS for map parsing
-                full_rhs = rhs + "\n" + "\n".join(l.text for l in body) + "\n)"
-                expr = self._parse_map_expr(full_rhs, line.number)
-                span = SourceSpan(line.number, end_line)
-        else:
-            expr = self._parse_expr(rhs, line.number)
-            span = SourceSpan(line.number, line.number)
+            raise SansScriptError(
+                code="E_PARSE",
+                message="Map-style let is not supported; use const { name = value, ... } for multiple literals.",
+                line=line.number,
+            )
+        expr = self._parse_expr(rhs, line.number)
+        return LetBinding(name=name, expr=expr, span=SourceSpan(line.number, line.number))
 
-        return LetBinding(name=name, expr=expr, span=span)
+    def _parse_const_decl(self, line: _Line) -> ConstDecl:
+        # const { name = literal, ... } — literals only: int, str, bool, null
+        s = line.stripped
+        if not s.lower().startswith("const "):
+            raise SansScriptError(code="E_PARSE", message="Malformed const declaration.", line=line.number)
+        rest = s[6:].strip()
+        if not rest.startswith("{") or not rest.endswith("}"):
+            raise SansScriptError(
+                code="E_PARSE",
+                message="const must be followed by { name = literal, ... }.",
+                line=line.number,
+                hint="Allowed literal types: int, string, bool, null",
+            )
+        inner = rest[1:-1].strip()
+        bindings: Dict[str, Any] = {}
+        if inner:
+            for part in self._split_by_comma_respecting_parens(inner):
+                part = part.strip()
+                if not part:
+                    continue
+                if "=" not in part:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message=f"const entry must be name = literal: '{part}'",
+                        line=line.number,
+                    )
+                name_part, _, value_part = part.partition("=")
+                name = name_part.strip().lower()
+                if not re.match(r"[a-zA-Z_]\w*", name):
+                    raise SansScriptError(code="E_PARSE", message=f"Invalid const name: '{name}'", line=line.number)
+                value_part = value_part.strip()
+                literal = self._parse_const_literal(value_part, line.number)
+                bindings[name] = literal
+        return ConstDecl(bindings=bindings, span=SourceSpan(line.number, line.number))
+
+    def _parse_const_literal(self, text: str, line_no: int) -> Any:
+        """Parse a single literal: int, quoted string, true/false, null. No floats, arrays, or nested objects."""
+        text = text.strip()
+        if not text:
+            raise SansScriptError(code="E_PARSE", message="const value cannot be empty.", line=line_no)
+        if text.lower() == "null":
+            return None
+        if text.lower() == "true":
+            return True
+        if text.lower() == "false":
+            return False
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+            return text[1:-1]
+        try:
+            return int(text)
+        except ValueError:
+            pass
+        raise SansScriptError(
+            code="E_PARSE",
+            message=f"const allows only int, string, bool, null; got '{text}'.",
+            line=line_no,
+            hint="No floats, arrays, or nested objects.",
+        )
 
     def _parse_table_binding(self, line: _Line) -> TableBinding:
         # table name = <table-expr>
@@ -301,6 +362,41 @@ class SansScriptParser:
         # We need to handle the case where <table-expr> might involve a block (do...end)
         expr = self._parse_table_expr(line, rhs_override=rhs_start)
         return TableBinding(name=name, expr=expr, span=expr.span)
+
+    def _parse_save_stmt(self, line: _Line) -> SaveStmt:
+        # save <table> to "<path>" [as "<name>"]
+        s = line.stripped
+        m = re.match(
+            r"save\s+([a-zA-Z_]\w*)\s+to\s+\"([^\"]*)\"(?:\s+as\s+\"([^\"]*)\")?\s*$",
+            s,
+            re.IGNORECASE,
+        )
+        if not m:
+            raise SansScriptError(
+                code="E_PARSE",
+                message="Malformed save statement.",
+                line=line.number,
+                hint='Use: save table_name to "path" [as "name"]',
+            )
+        table = m.group(1).lower()
+        path = m.group(2)
+        name = m.group(3) if m.group(3) else None
+        return SaveStmt(table=table, path=path, span=SourceSpan(line.number, line.number), name=name)
+
+    def _parse_assert_stmt(self, line: _Line) -> AssertStmt:
+        # assert <predicate>
+        s = line.stripped
+        if not s.lower().startswith("assert "):
+            raise SansScriptError(code="E_PARSE", message="Malformed assert statement.", line=line.number)
+        predicate_str = s[7:].strip()
+        if not predicate_str:
+            raise SansScriptError(
+                code="E_PARSE",
+                message="Assert requires a predicate expression.",
+                line=line.number,
+            )
+        predicate = self._parse_expr(predicate_str, line.number)
+        return AssertStmt(predicate=predicate, span=SourceSpan(line.number, line.number))
 
     def _parse_table_expr(self, line: _Line, rhs_override: Optional[str] = None) -> TableExpr:
         text = rhs_override if rhs_override is not None else line.stripped
@@ -325,7 +421,12 @@ class SansScriptParser:
             # Recursively parse inner as table expr
             source = self._parse_table_expr(line, rhs_override=inner)
             primary, remainder, end_line = self._parse_builder("sort", source, remainder, line)
+        elif text.lower().startswith("aggregate("):
+            inner, remainder = self._extract_balanced_parens(text[9:], line.number)
+            source = self._parse_table_expr(line, rhs_override=inner)
+            primary, remainder, end_line = self._parse_builder("aggregate", source, remainder, line)
         elif text.lower().startswith("summary("):
+            # Legacy input sugar; parses same as aggregate, lowerer emits op "aggregate".
             inner, remainder = self._extract_balanced_parens(text[7:], line.number)
             source = self._parse_table_expr(line, rhs_override=inner)
             primary, remainder, end_line = self._parse_builder("summary", source, remainder, line)
@@ -379,7 +480,7 @@ class SansScriptParser:
             processed_content = content
             processed_lowered = lowered
 
-            for k in ["select", "filter", "derive", "rename", "drop"]:
+            for k in ["select", "filter", "derive", "rename", "drop", "update!"]:
                 if processed_lowered.startswith(k + " ") or processed_lowered.startswith(k + "("):
                     kw = k
                     kw_len = len(k)
@@ -475,7 +576,7 @@ class SansScriptParser:
                 transform = self._parse_transform_clause(kw, args, line.number)
                 steps.append(transform)
 
-            elif processed_lowered.startswith("sort()") or processed_lowered.startswith("summary()"):
+            elif processed_lowered.startswith("sort()") or processed_lowered.startswith("summary()") or processed_lowered.startswith("aggregate()"):
                  raise SansScriptError(code="E_NOT_IMPL", message="Implicit source builders in pipeline not yet implemented.", line=line.number)
             else:
                 raise SansScriptError(
@@ -515,7 +616,7 @@ class SansScriptParser:
                     config["nodupkey"] = args_str.lower() == "true"
                 else:
                     raise SansScriptError(code="E_PARSE", message=f"Unknown sort builder method: {method}", line=curr_line)
-            elif kind == "summary":
+            elif kind in ("summary", "aggregate"):
                 if method == "class":
                     config["class"] = self._parse_columns(args_str, curr_line)
                 elif method == "var":
@@ -523,7 +624,7 @@ class SansScriptParser:
                 elif method == "stats":
                     config["stats"] = self._parse_columns(args_str, curr_line)
                 else:
-                    raise SansScriptError(code="E_PARSE", message=f"Unknown summary builder method: {method}", line=curr_line)
+                    raise SansScriptError(code="E_PARSE", message=f"Unknown aggregate builder method: {method}", line=curr_line)
         
         return BuilderExpr(kind=kind, source=source, config=config, span=SourceSpan(line.number, curr_line)), curr_rem, curr_line
 
@@ -539,7 +640,7 @@ class SansScriptParser:
                 if next_line:
                     s = next_line.stripped.lower()
                     # Check if it looks like a postfix clause or bracket sugar
-                    if s.startswith("[") or any(s.startswith(kw + " ") or s.startswith(kw + "(") for kw in ["select", "filter", "derive", "rename", "drop"]):
+                    if s.startswith("[") or any(s.startswith(kw + " ") or s.startswith(kw + "(") for kw in ["select", "filter", "derive", "rename", "drop", "update!"]):
                         self._next_content_line() # consume it
                         curr_rem = next_line.stripped
                         curr_end_line = next_line.number
@@ -559,7 +660,7 @@ class SansScriptParser:
                 curr_rem = match.group(2).strip()
                 continue
 
-            match = re.match(r"(select|filter|derive|rename|drop)(?:\s+|\()", curr_rem, re.IGNORECASE)
+            match = re.match(r"(select|filter|derive|rename|drop|update!)(?:\s+|\()", curr_rem, re.IGNORECASE)
             if not match:
                 break
             
@@ -573,7 +674,7 @@ class SansScriptParser:
             else:
                  args_part = curr_rem[len(kind):].strip()
                  # Simple heuristic: split by next keyword
-                 next_kw_match = re.search(r"\s+(select|filter|derive|rename|drop)(?:\s+|\()", args_part, re.IGNORECASE)
+                 next_kw_match = re.search(r"\s+(select|filter|derive|rename|drop|update!)(?:\s+|\()", args_part, re.IGNORECASE)
                  if next_kw_match:
                      this_args = args_part[:next_kw_match.start()].strip()
                      curr_rem = args_part[next_kw_match.start():].strip()
@@ -609,6 +710,14 @@ class SansScriptParser:
             if args_str.startswith("(") and args_str.endswith(")"):
                 args_str = args_str[1:-1].strip()
             params["assignments"] = self._parse_derive_assignments(args_str, line_no)
+        elif kind == "update!":
+            # update!(a = 1, b = 2) — all assignments overwrite existing columns
+            if args_str.startswith("(") and args_str.endswith(")"):
+                args_str = args_str[1:-1].strip()
+            raw = self._parse_derive_assignments(args_str, line_no)
+            for a in raw:
+                a["allow_overwrite"] = True
+            params["assignments"] = raw
         elif kind == "rename":
             if args_str.startswith("(") and args_str.endswith(")"):
                 args_str = args_str[1:-1].strip()

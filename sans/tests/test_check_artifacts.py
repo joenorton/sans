@@ -42,7 +42,7 @@ def test_emit_check_artifacts_success():
         assert report_json["status"] == "ok"
         assert len(plan["steps"]) == 2
         assert plan["steps"][1]["op"] == "sort"
-        assert plan["steps"][1]["params"] == {"by": [{"col": "x", "asc": True}]}
+        assert plan["steps"][1]["params"] == {"by": [{"col": "x", "desc": False}]}
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

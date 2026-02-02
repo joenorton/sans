@@ -6,14 +6,16 @@ from sans.ir import OpStep
 from sans._loc import Loc
 
 from .ast import (
+    AssertStmt,
     BuilderExpr,
+    ConstDecl,
     FromExpr,
     LetBinding,
-    MapExpr,
     PipelineExpr,
     PostfixExpr,
     SansScript,
     SansScriptStmt,
+    SaveStmt,
     SourceSpan,
     TableBinding,
     TableExpr,
@@ -39,26 +41,54 @@ class Lowerer:
         for stmt in script.statements:
             if isinstance(stmt, LetBinding):
                 self._lower_let(stmt)
-            elif isinstance(stmt, DatasourceDeclaration): # New: lower datasource
+            elif isinstance(stmt, DatasourceDeclaration):
                 self._lower_datasource(stmt)
             elif isinstance(stmt, TableBinding):
                 self._lower_table_binding(stmt)
+            elif isinstance(stmt, SaveStmt):
+                self._lower_save(stmt)
+            elif isinstance(stmt, AssertStmt):
+                self._lower_assert(stmt)
+            elif isinstance(stmt, ConstDecl):
+                self._lower_const(stmt)
         
         if script.terminal_expr:
-            self._lower_table_expr(script.terminal_expr, output="__result__")
+            # No implicit output: terminal expression lowers to a temp, not __result__.
+            self._lower_table_expr(script.terminal_expr, output=None)
         
         # Filter out datasource pseudo-inputs from references
         real_references = {r for r in self.referenced if not r.startswith("__datasource__")}
         
         return self.steps, real_references
 
+    def _lower_save(self, stmt: SaveStmt):
+        self.steps.append(OpStep(
+            op="save",
+            inputs=[stmt.table],
+            outputs=[],  # side effect: write artifact
+            params={"path": stmt.path, "name": stmt.name},
+            loc=self._loc(stmt.span),
+        ))
+
+    def _lower_assert(self, stmt: AssertStmt):
+        self.steps.append(OpStep(
+            op="assert",
+            inputs=[],
+            outputs=[],  # evidence only
+            params={"predicate": stmt.predicate},
+            loc=self._loc(stmt.span),
+        ))
+
     def _lower_datasource(self, stmt: DatasourceDeclaration):
         params = {
             "name": stmt.name,
             "path": stmt.path,
             "columns": stmt.columns,
-            "kind": "csv",
+            "kind": stmt.kind,
         }
+        if stmt.kind == "inline_csv":
+            params["inline_text"] = stmt.inline_text
+            params["inline_sha256"] = stmt.inline_sha256
         self.steps.append(OpStep(
             op="datasource",
             inputs=[],
@@ -71,38 +101,24 @@ class Lowerer:
 
 
     def _lower_let(self, stmt: LetBinding):
-        if isinstance(stmt.expr, MapExpr):
-            self.steps.append(self._lower_map(stmt.name, stmt.expr))
-        else:
-            # Scalar let binding - currently we don't have a specific IR op for this 
-            # unless it's a map. In sans, maps are the main complex scalar.
-            # Other scalars are usually used inside expressions.
-            # If needed, we could emit a 'compute' or similar, but for now let's skip
-            # as they are just bindings for the compiler's expression evaluator.
-            pass
-
-    def _lower_map(self, name: str, expr: MapExpr) -> OpStep:
-        mapping: Dict[str, Any] = {}
-        default: Any = None
-        for entry in expr.entries:
-            val = entry.value
-            # If it's a literal, extract the value for the IR
-            if isinstance(val, dict) and val.get("type") == "lit":
-                val = val.get("value")
-            
-            if entry.key is None:
-                default = val
-            else:
-                mapping[entry.key] = val
-        
-        params = {"name": name, "map": mapping, "other": default}
-        return OpStep(
-            op="format",
+        # Single scalar binding → IR op let_scalar (immutable, no side effect; substitution in expressions).
+        self.steps.append(OpStep(
+            op="let_scalar",
             inputs=[],
-            outputs=[f"__format__{name}"],
-            params=params,
-            loc=self._loc(expr.span),
-        )
+            outputs=[],
+            params={"name": stmt.name, "expr": stmt.expr},
+            loc=self._loc(stmt.span),
+        ))
+
+    def _lower_const(self, stmt: ConstDecl):
+        # const { ... } → one IR op "const" with bindings (deterministic; one op for round-trip clarity).
+        self.steps.append(OpStep(
+            op="const",
+            inputs=[],
+            outputs=[],
+            params={"bindings": dict(stmt.bindings)},
+            loc=self._loc(stmt.span),
+        ))
 
     def _lower_table_binding(self, stmt: TableBinding):
         self._lower_table_expr(stmt.expr, output=stmt.name)
@@ -158,14 +174,12 @@ class Lowerer:
             for i, step in enumerate(expr.steps):
                 is_last = (i == len(expr.steps) - 1)
                 step_output = final_output if (is_last and output) else self.next_temp()
-                self._lower_transform(step, curr_input, step_output)
-                curr_input = step_output
+                curr_input = self._lower_transform(step, curr_input, step_output)
             return curr_input
 
         if isinstance(expr, PostfixExpr):
             curr_input = self._lower_table_expr(expr.source)
-            self._lower_transform(expr.transform, curr_input, final_output)
-            return final_output
+            return self._lower_transform(expr.transform, curr_input, final_output)
 
         if isinstance(expr, BuilderExpr):
             curr_input = self._lower_table_expr(expr.source)
@@ -177,9 +191,10 @@ class Lowerer:
                     params={"by": expr.config.get("by", []), "nodupkey": expr.config.get("nodupkey", False)},
                     loc=self._loc(expr.span)
                 ))
-            elif expr.kind == "summary":
-                 self.steps.append(OpStep(
-                    op="summary",
+            elif expr.kind in ("summary", "aggregate"):
+                # summary() is legacy input sugar; always lower to canonical op "aggregate".
+                self.steps.append(OpStep(
+                    op="aggregate",
                     inputs=[curr_input],
                     outputs=[final_output],
                     params={
@@ -189,13 +204,13 @@ class Lowerer:
                         "naming": "{var}_{stat}",
                         "autoname": True,
                     },
-                    loc=self._loc(expr.span)
+                    loc=self._loc(expr.span),
                 ))
             return final_output
 
         return final_output
 
-    def _lower_transform(self, transform: TableTransform, input_table: str, output_table: str):
+    def _lower_transform(self, transform: TableTransform, input_table: str, output_table: str) -> str:
         if transform.kind == "select":
             self.steps.append(OpStep(
                 op="select",
@@ -204,14 +219,16 @@ class Lowerer:
                 params={"keep": transform.params.get("keep", []), "drop": transform.params.get("drop", [])},
                 loc=self._loc(transform.span)
             ))
+            return output_table
         elif transform.kind == "drop":
-             self.steps.append(OpStep(
+            self.steps.append(OpStep(
                 op="select",
                 inputs=[input_table],
                 outputs=[output_table],
                 params={"drop": transform.params.get("drop", [])},
                 loc=self._loc(transform.span)
             ))
+            return output_table
         elif transform.kind == "filter":
             self.steps.append(OpStep(
                 op="filter",
@@ -220,23 +237,35 @@ class Lowerer:
                 params={"predicate": transform.params["predicate"]},
                 loc=self._loc(transform.span)
             ))
-        elif transform.kind == "derive":
-            # Map derive to a data_step for now as it handles multiple assignments well
-            params = {
-                "mode": "set",
-                "inputs": [{"table": input_table}],
-                "statements": transform.params["assignments"],
-                "keep": [],
-                "drop": [],
-                "explicit_output": False,
-            }
-            self.steps.append(OpStep(
-                op="data_step",
-                inputs=[input_table],
-                outputs=[output_table],
-                params=params,
-                loc=self._loc(transform.span)
-            ))
+            return output_table
+        elif transform.kind in ("derive", "update!"):
+            # Lower to IR op compute with mode "derive" | "update" (one step per consecutive same-mode group).
+            assignments = transform.params["assignments"]
+            idx = 0
+            while idx < len(assignments):
+                allow_overwrite = assignments[idx].get("allow_overwrite", False)
+                mode = "update" if allow_overwrite else "derive"
+                group = []
+                while idx < len(assignments) and assignments[idx].get("allow_overwrite", False) == allow_overwrite:
+                    group.append(assignments[idx])
+                    idx += 1
+                step_output = output_table if idx >= len(assignments) else self.next_temp()
+                params = {
+                    "mode": mode,
+                    "assignments": [
+                        {"target": a["target"], "expr": a["expr"]}
+                        for a in group
+                    ],
+                }
+                self.steps.append(OpStep(
+                    op="compute",
+                    inputs=[input_table],
+                    outputs=[step_output],
+                    params=params,
+                    loc=self._loc(transform.span),
+                ))
+                input_table = step_output
+            return input_table
         elif transform.kind == "rename":
             self.steps.append(OpStep(
                 op="rename",
@@ -245,6 +274,8 @@ class Lowerer:
                 params={"mappings": transform.params["mappings"]},
                 loc=self._loc(transform.span)
             ))
+            return output_table
+        return output_table
 
     def _loc(self, span: SourceSpan) -> Loc:
         return Loc(file=self.file_name, line_start=span.start, line_end=span.end)

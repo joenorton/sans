@@ -109,47 +109,35 @@ def test_double_run_determinism(tmp_path):
     in_csv.write_text("a,b\n1,2\n3,4", encoding="utf-8")
     script_path = tmp_path / "s.sas"
     script_path.write_text("data out; set in; c = a + b; run;", encoding="utf-8")
-    
+
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    
-    main(["run", str(script_path), "--out", str(out1), "--tables", f"in={in_csv}"])
-    main(["run", str(script_path), "--out", str(out2), "--tables", f"in={in_csv}"])
-    
-    # Compare files. plan.ir.json should be identical.
+
+    ret1 = main(["run", str(script_path), "--out", str(out1), "--tables", f"in={in_csv}"])
+    ret2 = main(["run", str(script_path), "--out", str(out2), "--tables", f"in={in_csv}"])
+    assert ret1 == 0
+    assert ret2 == 0
+
+    # 1) semantic artifact determinism: plan.ir.json must match byte-for-byte.
     p1 = (out1 / "plan.ir.json").read_text(encoding="utf-8")
     p2 = (out2 / "plan.ir.json").read_text(encoding="utf-8")
     assert p1 == p2
-    
+
+    # optional: expanded.sans is your canonical human form; compare it too.
+    expanded1 = out1 / "expanded.sans"
+    expanded2 = out2 / "expanded.sans"
+    assert expanded1.exists()
+    assert expanded2.exists()
+    assert expanded1.read_text(encoding="utf-8") == expanded2.read_text(encoding="utf-8")
+
+
+    # 2) output artifact determinism: out.csv bytes must match.
     o1 = (out1 / "out.csv").read_bytes()
     o2 = (out2 / "out.csv").read_bytes()
     assert o1 == o2
-    
-    # report.json will differ in timing and absolute paths.
-    # We strip those for comparison.
-    def clean_report(path):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["timing"] = {}
-        if "runtime" in data:
-            data["runtime"]["timing"] = {}
-            for out in data["runtime"].get("outputs", []):
-                out["path"] = Path(out["path"]).name
-        # Paths are absolute, so we make them relative to out dir
-        for io_list in ["inputs", "outputs"]:
-            for item in data.get(io_list, []):
-                p = Path(item["path"])
-                item["path"] = p.name
-        
-        data["plan_path"] = Path(data["plan_path"]).name
-        # Self-hash of report and other new artifacts will differ if paths or timing differ
-        # Or if they contain non-deterministic data like UUIDs.
-        for out in data.get("outputs", []):
-            out_path = Path(out["path"])
-            out["path"] = out_path.name
-            if out_path.name in ["report.json", "runtime.evidence.json"]:
-                out["sha256"] = None
-        
-        return data
 
-    assert clean_report(out1 / "report.json") == clean_report(out2 / "report.json")
-        
+    # 3) report determinism foundation: each run must verify under the canonical hash contract.
+    # we do NOT compare report.json across runs; report is allowed to include env/timing/path noise.
+    assert main(["verify", str(out1)]) == 0
+    assert main(["verify", str(out2)]) == 0
+

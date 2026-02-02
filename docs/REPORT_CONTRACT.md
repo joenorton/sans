@@ -15,6 +15,7 @@ Top-level fields
 - `inputs[]`: list of `{path, sha256?}`.
 - `outputs[]`: list of `{path, sha256?}`.
 - `plan_path`: path to the emitted `plan.ir.json`.
+- `report_sha256`: SHA-256 of the canonical report payload (used by `sans verify` for self-check). Optional in legacy reports.
 - `engine`: `{name, version}`.
 - `settings`: effective settings used for this run.
 - `timing`: `{compile_ms, validate_ms, execute_ms}` (values may be `null`).
@@ -48,6 +49,10 @@ Minimum fields currently emitted:
 - `tolerance` (object or null)
 - `tables` (list of predeclared input table names)
 
+Standard output artifacts
+- `sans check`: `plan.ir.json`, `report.json`.
+- `sans run`: `plan.ir.json`, `report.json`, `expanded.sans` (canonical script form from IR), runtime table outputs (e.g. `out.csv`), `registry.candidate.json`, `runtime.evidence.json`. All listed in `outputs[]` with `sha256` (except `report.json`, which uses `report_sha256` for self-check).
+
 Notes
 - `diagnostics` may include non-fatal items in `ok_warnings`.
-- `outputs` always includes both `plan.ir.json` and `report.json` paths; hashes are optional.
+- `outputs` always includes `plan.ir.json` and `report.json`; hashes are optional for `report.json` (see `report_sha256`).

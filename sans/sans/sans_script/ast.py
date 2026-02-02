@@ -25,8 +25,16 @@ class MapExpr:
 
 @dataclass
 class LetBinding:
+    """Single scalar binding: let name = expr → let_scalar. No map-style; use ConstDecl for multiple literals."""
     name: str
-    expr: Union[ExprNode, MapExpr]
+    expr: Any  # ExprNode (single expression only)
+    span: SourceSpan
+
+
+@dataclass
+class ConstDecl:
+    """Multiple named scalar literals: const { a = 1, b = "x" }. Lowers to one IR op 'const'. Literals only: int, str, bool, null."""
+    bindings: Dict[str, Any]  # name -> literal (int, str, bool, None)
     span: SourceSpan
 
 
@@ -70,7 +78,7 @@ class PostfixExpr(TableExpr):
 
 @dataclass
 class BuilderExpr(TableExpr):
-    kind: str  # 'sort', 'summary'
+    kind: str  # 'sort', 'summary' (legacy), 'aggregate'
     source: TableExpr
     config: Dict[str, Any]
     span: SourceSpan
@@ -96,7 +104,24 @@ class DatasourceDeclaration:
     inline_text: Optional[str] = None        # normalized CSV text
     inline_sha256: Optional[str] = None      # hash of normalized text
 
-SansScriptStmt = Union[LetBinding, TableBinding, DatasourceDeclaration]
+
+@dataclass
+class SaveStmt:
+    """save table to "path" [as "name"]"""
+    table: str
+    path: str
+    span: SourceSpan
+    name: Optional[str] = None  # artifact name; default from path or table
+
+
+@dataclass
+class AssertStmt:
+    """assert <predicate> (e.g. row_count(t) > 0)"""
+    predicate: Any  # ExprNode dict
+    span: SourceSpan
+
+
+SansScriptStmt = Union[LetBinding, ConstDecl, TableBinding, DatasourceDeclaration, SaveStmt, AssertStmt]
 
 
 @dataclass

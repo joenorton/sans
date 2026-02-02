@@ -1,0 +1,19 @@
+# sans 0.1
+datasource in = inline_csv do
+  a,b
+  6,7
+  3,2
+end
+const { pi = 3 }
+table t = from(in) do
+  derive(v2 = b * 2)
+  filter(v2 > 10)
+  select a, v2
+end
+table t2 = t rename(v2 -> x)
+table t3 = sort(t2).by(a)
+table out = aggregate(t3)
+  .class(a)
+  .var(x)
+save out to "out.csv"
+let two = 2

@@ -99,27 +99,37 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "verify":
-        from .hash_utils import compute_artifact_hash, _sha256_text
+        from .hash_utils import compute_artifact_hash, compute_report_sha256
         bundle_path = Path(args.bundle)
         if bundle_path.is_dir():
             report_path = bundle_path / "report.json"
+            bundle_root = bundle_path.resolve()
         else:
             report_path = bundle_path
-            
+            bundle_root = report_path.parent.resolve()
+
         if not report_path.exists():
             print(f"failed: report not found at {report_path}")
             return 1
-            
+
         try:
-            report_text = report_path.read_text(encoding="utf-8")
-            report = json.loads(report_text)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
         except Exception as e:
             print(f"failed: invalid json in report: {e}")
             return 1
 
-        # Check inputs
+        # Canonical report self-hash check
+        expected_sha = report.get("report_sha256")
+        if expected_sha is not None:
+            actual_sha = compute_report_sha256(report, bundle_root)
+            if actual_sha != expected_sha:
+                print("failed: report hash mismatch")
+                return 1
+
+        # Check inputs (paths relative to bundle_root when not absolute)
         for inp in report.get("inputs", []):
-            path = Path(inp.get("path"))
+            path_str = inp.get("path") or ""
+            path = (bundle_root / path_str) if not Path(path_str).is_absolute() else Path(path_str)
             expected = inp.get("sha256")
             if not path.exists():
                 print(f"failed: input file missing: {path}")
@@ -128,64 +138,21 @@ def main(argv: list[str] | None = None) -> int:
             if actual != expected:
                 print(f"failed: input hash mismatch for {path}")
                 return 1
-                
+
         # Check outputs
-        plan_verified = False
         reported_plan_path = report.get("plan_path")
         for out in report.get("outputs", []):
-            path_str = out.get("path")
-            path = Path(path_str)
-            
+            path_str = out.get("path") or ""
+            path = (bundle_root / path_str) if not Path(path_str).is_absolute() else Path(path_str)
+            expected = out.get("sha256")
+
             if reported_plan_path and path_str == reported_plan_path:
                 if not path.exists():
                     print(f"failed: plan file missing at {path}")
                     return 1
-                plan_verified = True
-            expected = out.get("sha256")
-            if expected is None:
-                continue
 
-            # Special handling for report.json self-verification
-            # We assume report.path in json matches the file we are reading
-            # Or we check if path matches report_path
-            is_report = False
-            try:
-                if path.resolve() == report_path.resolve():
-                    is_report = True
-            except OSError:
-                pass
-            
-            if is_report:
-                # To verify report.json, we must revert the self-hash to None (or whatever it was before writing)
-                # In compiler.py, it sets output[1]["sha256"] = hash. 
-                # We need to find the entry for report.json in the loaded report and set it to None, then serialize.
-                # But serialization must be exact (indent=2).
-                
-                # Deep copy report to modify
-                report_copy = json.loads(report_text) 
-                # Find the self entry
-                found = False
-                for item in report_copy.get("outputs", []):
-                    if item.get("path") == path_str:
-                        item["sha256"] = None
-                        found = True
-                        break
-                
-                if found:
-                    # Re-serialize exactly as compiler.py does
-                    # compiler.py uses json.dumps(report, indent=2)
-                    # Python's json.dumps with indent=2 adds trailing spaces? No.
-                    # separators? default is (', ', ': ')
-                    expected_bytes = json.dumps(report_copy, indent=2).encode("utf-8")
-                    actual_hash = _sha256_text(expected_bytes.decode("utf-8")) # hash_utils._sha256_text takes str
-                    
-                    # Wait, hash_utils._sha256_text encodes as utf-8 then hashes.
-                    # So passing the string is correct.
-                    
-                    if actual_hash != expected:
-                        print(f"failed: report hash mismatch")
-                        return 1
-                continue
+            if expected is None:
+                continue  # report.json entry has sha256=None; verified via report_sha256
 
             if not path.exists():
                 print(f"failed: output file missing: {path}")
@@ -194,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             if actual != expected:
                 print(f"failed: output hash mismatch for {path}")
                 return 1
-                
+
         print("ok: verified")
         return 0
 
