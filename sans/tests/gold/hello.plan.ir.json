@@ -21,6 +21,7 @@
         "inline_sha256": "a4e9bdec268b4972d200e960fc015dfc8eb8890972a34426a1b98bf66e668e8a"
       },
       "transform_id": "cb8a52534f358d08c1ee8920c22ee5085389ae76ea2514ebefb4032387c619d1",
+      "transform_class_id": "f0a5ed4edcf341ea502098505598931d8d05dcdf536c42f7595bbe35a90f65e5",
       "step_id": "30dc2d0a2c3af82e84dc77a18c9dd3978714072cde323a1930bb50a43568f01e"
     },
     {
@@ -58,6 +59,7 @@
         ]
       },
       "transform_id": "abc699af5d6b9ca60ea5b4e55d54f30925333859904f1361d57fa06efe3ffa40",
+      "transform_class_id": "346c201a3760646b2d1ffdffe728f079c27073dfe893b95f12080a6203f8911a",
       "step_id": "38cdfb61a07a3c5f32e50b443d3edffd557ae84c0cf358b1a212c3924dac1da0"
     },
     {
@@ -89,6 +91,7 @@
         }
       },
       "transform_id": "b332ccef4c9e10f3a82dfd0e51f3e1f7338e17b73ecbb4006b41483b03798458",
+      "transform_class_id": "4838c24ba0c8874f3edbcc80bc8f9707eefdd065a8b5ec1a410f438d7fb9f476",
       "step_id": "d65c72b0a87f7a42746eec49deb1712cc59998ce8ecdcc6847d883446b1d172b"
     },
     {
@@ -112,6 +115,7 @@
         ]
       },
       "transform_id": "c90ed63a589568ec1562a6cb58ad699cf7a5c0b7417fd0654f67951a0adb26c2",
+      "transform_class_id": "565e4829c669349524cde1a8f763ee5c612fe33057318818e984cf625eb7218e",
       "step_id": "9eb4430ce0d6c3c4380e73a8947a6900d70ef6b3d201e356ae7f3b6ac7291b96"
     },
     {
@@ -135,6 +139,7 @@
         ]
       },
       "transform_id": "c90ed63a589568ec1562a6cb58ad699cf7a5c0b7417fd0654f67951a0adb26c2",
+      "transform_class_id": "565e4829c669349524cde1a8f763ee5c612fe33057318818e984cf625eb7218e",
       "step_id": "dd2737b664e5ee48a72b719e8f675b1a0fe19b7a361415a3d435a0f09e16d3dc"
     }
   ],

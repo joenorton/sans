@@ -66,6 +66,24 @@ transform_id = sha256(canonical_json(transform_payload))
 * MUST NOT include concrete table names (`inputs`, `outputs`)
 * MUST NOT include file paths, row counts, hashes, timestamps, or `loc`
 
+### transform class identity (structural, literal-agnostic)
+
+**transform_class_id** identifies a transform by structure while ignoring literal values:
+
+```
+param_shape = params with every {"type":"lit","value":...} replaced by {"type":"lit","lit_type":"number|string|decimal|bool|null"}
+
+transform_class_payload = {
+  "op": <op>,
+  "param_shape": <param_shape>
+}
+
+transform_class_id = sha256(canonical_json(transform_class_payload))
+```
+
+* MUST preserve column names, operator tokens, and AST structure
+* MUST ignore literal values only (not column names or operator tokens)
+
 ### step identity (application, wiring-specific)
 
 **step_id** identifies a specific *application* of a transform in a plan:
@@ -103,6 +121,7 @@ each element of `steps` MUST contain:
 * `op`: string (e.g. `compute|filter|select|sort`)
 * `params`: op-specific params (see below)
 * `transform_id`: semantic id (see identity model)
+* `transform_class_id`: structural id (see identity model; literal-agnostic)
 * `inputs`: list of logical table names
 * `outputs`: list of logical table names
 * `step_id`: application id (see identity model)

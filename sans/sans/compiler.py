@@ -25,7 +25,7 @@ from .hash_utils import compute_artifact_hash, compute_input_hash, compute_repor
 from .bundle import ensure_bundle_layout, bundle_relative_path, INPUTS_SOURCE, ARTIFACTS
 from .graph import build_graph, write_graph_json
 from .sans_script import SansScriptError, lower_script, parse_sans_script
-from .sans_script.canon import compute_step_id, compute_transform_id
+from .sans_script.canon import compute_step_id, compute_transform_id, compute_transform_class_id
 
 def _loc_to_dict(loc) -> Dict[str, Any]:
     return {"file": Path(loc.file).as_posix(), "line_start": loc.line_start, "line_end": loc.line_end}
@@ -33,6 +33,7 @@ def _loc_to_dict(loc) -> Dict[str, Any]:
 def _step_to_dict(step: Step) -> Dict[str, Any]:
     if isinstance(step, OpStep):
         t_id = compute_transform_id(step.op, step.params)
+        t_class_id = compute_transform_class_id(step.op, step.params)
         return {
             "kind": "op",
             "loc": _loc_to_dict(step.loc),
@@ -41,6 +42,7 @@ def _step_to_dict(step: Step) -> Dict[str, Any]:
             "outputs": list(step.outputs),
             "params": step.params,
             "transform_id": t_id,
+            "transform_class_id": t_class_id,
             "step_id": compute_step_id(t_id, step.inputs, step.outputs),
         }
     if isinstance(step, UnknownBlockStep):

@@ -3,7 +3,12 @@ import hashlib
 import pytest
 from pathlib import Path
 from sans.runtime import run_script
-from sans.sans_script.canon import compute_transform_id, compute_step_id, _canonicalize
+from sans.sans_script.canon import (
+    compute_transform_id,
+    compute_transform_class_id,
+    compute_step_id,
+    _canonicalize,
+)
 
 def test_contract_identities(tmp_path):
     in_csv = tmp_path / "in.csv"
@@ -25,11 +30,16 @@ def test_contract_identities(tmp_path):
     for step in plan["steps"]:
         if step["kind"] == "op":
             assert "transform_id" in step
+            assert "transform_class_id" in step
             assert "step_id" in step
             
             # Invariant: recomputing transform_id from {op, params} must match emitted value
             expected_t_id = compute_transform_id(step["op"], step["params"])
             assert step["transform_id"] == expected_t_id
+
+            # Invariant: recomputing transform_class_id from {op, param_shape} must match emitted value
+            expected_tc_id = compute_transform_class_id(step["op"], step["params"])
+            assert step["transform_class_id"] == expected_tc_id
             
             # Invariant: recomputing step_id from {transform_id, inputs, outputs} must match emitted value
             expected_s_id = compute_step_id(step["transform_id"], step["inputs"], step["outputs"])

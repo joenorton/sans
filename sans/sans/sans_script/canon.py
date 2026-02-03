@@ -3,6 +3,7 @@
 import hashlib
 import json
 from typing import Any, Dict, List
+from decimal import Decimal
 
 from sans.ir import OpStep
 
@@ -15,10 +16,47 @@ def _canonicalize(value: Any) -> Any:
     return value
 
 
+def _lit_type(value: Any) -> str:
+    if isinstance(value, dict) and value.get("type") == "decimal":
+        return "decimal"
+    if isinstance(value, Decimal):
+        return "decimal"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    # Fallback: treat unknown literal-like values as string for deterministic shape.
+    return "string"
+
+
+def canonicalize_param_shape(params: Any) -> Any:
+    if isinstance(params, dict):
+        node_type = params.get("type")
+        if node_type == "lit":
+            return {"type": "lit", "lit_type": _lit_type(params.get("value"))}
+        return {key: canonicalize_param_shape(params[key]) for key in sorted(params)}
+    if isinstance(params, list):
+        return [canonicalize_param_shape(item) for item in params]
+    return params
+
+
 def compute_transform_id(op: str, params: Dict[str, Any]) -> str:
     payload = {
         "op": op,
         "params": _canonicalize(params or {}),
+    }
+    text = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def compute_transform_class_id(op: str, params: Dict[str, Any]) -> str:
+    payload = {
+        "op": op,
+        "param_shape": _canonicalize(canonicalize_param_shape(params or {})),
     }
     text = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     return hashlib.sha256(text.encode('utf-8')).hexdigest()

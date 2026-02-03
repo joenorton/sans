@@ -6,7 +6,12 @@ import hashlib
 import json
 
 from .ir import IRDoc, OpStep
-from .sans_script.canon import compute_step_id, compute_transform_id, _canonicalize
+from .sans_script.canon import (
+    compute_step_id,
+    compute_transform_id,
+    compute_transform_class_id,
+    _canonicalize,
+)
 
 
 def _canonical_json_bytes(payload: Any) -> bytes:
@@ -38,6 +43,7 @@ def build_graph(irdoc: IRDoc, producer: Optional[Dict[str, str]] = None) -> Dict
         if not isinstance(step, OpStep):
             continue
         t_id = compute_transform_id(step.op, step.params)
+        t_class_id = compute_transform_class_id(step.op, step.params)
         step_id = compute_step_id(t_id, step.inputs, step.outputs)
         step_node_id = f"s:{step_id}"
         ordered_steps.append((step, step_id))
@@ -47,6 +53,7 @@ def build_graph(irdoc: IRDoc, producer: Optional[Dict[str, str]] = None) -> Dict
                 "kind": "step",
                 "op": step.op,
                 "transform_id": t_id,
+                "transform_class_id": t_class_id,
                 "inputs": sorted([f"t:{t}" for t in step.inputs]),
                 "outputs": sorted([f"t:{t}" for t in step.outputs]),
                 "payload_sha256": compute_step_payload_sha256(step),

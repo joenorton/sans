@@ -13,6 +13,7 @@
       "kind": "step",
       "op": "<op>",
       "transform_id": "<transform_id>",
+      "transform_class_id": "<transform_class_id>",
       "inputs": ["t:<table_id>", ...],
       "outputs": ["t:<table_id>", ...],
       "payload_sha256": "<sha256>"
@@ -46,3 +47,8 @@
   - Canonical JSON: `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`, UTF-8 encoded, then SHA-256.
 - The `report.json` artifact entry for `graph.json` uses the same canonical JSON hashing rules as other `.json` artifacts.
  - payload_sha256 is computed from the canonical json serialization of {op, inputs, outputs, params, transform_id} with no loc, step_id, or environment data.
+
+## Identity Notes
+- `transform_class_id` is a structural identity that ignores literal values.
+- Computed from `sha256(canonical_json({op, param_shape}))`.
+- `param_shape` replaces every `{"type":"lit","value":...}` with `{"type":"lit","lit_type":"number|string|decimal|bool|null"}` while preserving column names, operator tokens, and AST structure.
