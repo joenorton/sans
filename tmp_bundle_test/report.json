@@ -1,5 +1,5 @@
 {
-  "report_schema_version": "0.2",
+  "report_schema_version": "0.3",
   "status": "ok",
   "exit_code_bucket": 0,
   "primary_error": null,
@@ -22,7 +22,7 @@
     {
       "name": "plan.ir.json",
       "path": "artifacts/plan.ir.json",
-      "sha256": "d13c72afc2078c556f5ae3f6a48212591ee1a9f666728f701146707af1087839"
+      "sha256": "32dfa4def158d390bc565c9e058fa2aa05212bd6ca7e884aaab9cd8744b255c3"
     }
   ],
   "outputs": [],
@@ -45,5 +45,5 @@
     "validate_ms": 0,
     "execute_ms": null
   },
-  "report_sha256": "758fceba00ec26b68140c0784cb75c77c43f0ea4cfe9a2cae6968e367f62c87a"
+  "report_sha256": "b70e810e507a279a1995d879fd62c576d13ffc4fcf82ef697dbe486bc24314fc"
 }

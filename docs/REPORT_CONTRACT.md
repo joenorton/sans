@@ -8,7 +8,7 @@ When it is written
 - Always. `sans check` writes both `plan.ir.json` (under `artifacts/`) and `report.json` at bundle root.
 
 Top-level fields
-- `report_schema_version`: string (e.g. `"0.2"`); bumped for breaking changes.
+- `report_schema_version`: string (e.g. `"0.3"`); bumped for breaking changes.
 - `status`: one of `ok`, `ok_warnings`, `refused`, `failed`.
 - `exit_code_bucket`: one of `0`, `10`, `20`, `30`, `31`, `32`, `50`.
 - `primary_error`: `{code, message, loc}` or `null`.
@@ -28,6 +28,8 @@ Paths
 
 Determinism
 - Report arrays `inputs`, `artifacts`, `outputs` are canonically sorted (e.g. by path) in `canonicalize_report` for determinism.
+- For any artifact or output with a `.json` suffix, `sha256` is the canonical JSON hash: parse JSON as UTF-8, serialize with `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`, UTF-8 encode, and hash.
+- Non-JSON artifacts keep existing hashing behavior (CSV canonicalization; other files hash raw bytes or canonicalized text when defined).
 
 Status and exit buckets
 - `ok` -> `0`
@@ -40,7 +42,7 @@ Error payload shape
 - `message`: human-readable message.
 - `loc`: `{file, line_start, line_end}` or `null` when unavailable.
 
-Bundle layout (v0.2)
+Bundle layout (v0.3)
 - `report.json` at bundle root (only file at root besides directory structure).
 - `inputs/source/`: analysis script, preprocessed.sas (if any), expanded.sans (if any).
 - `inputs/data/`: materialized datasource files (by logical name).

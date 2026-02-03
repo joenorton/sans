@@ -21,7 +21,7 @@ from .sans_script.ast import DatasourceDeclaration # New import
 from . import __version__ as _engine_version
 
 
-from .hash_utils import compute_artifact_hash, _sha256_text, compute_report_sha256
+from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
 from .bundle import ensure_bundle_layout, bundle_relative_path, INPUTS_SOURCE, ARTIFACTS
 from .sans_script import SansScriptError, lower_script, parse_sans_script
 from .sans_script.canon import compute_step_id, compute_transform_id
@@ -445,7 +445,11 @@ def emit_check_artifacts(
 
     source_basename = Path(file_name).name or "script"
     source_dest = out_path / INPUTS_SOURCE / source_basename
-    source_dest.write_text(text, encoding="utf-8")
+    source_path = Path(file_name)
+    if file_name and source_path.exists() and source_path.is_file():
+        source_dest.write_bytes(source_path.read_bytes())
+    else:
+        source_dest.write_text(text, encoding="utf-8")
 
     report_path = out_path / report_name
 
@@ -466,17 +470,17 @@ def emit_check_artifacts(
     plan_rel = bundle_relative_path(plan_path, out_path)
     source_rel = bundle_relative_path(source_dest, out_path)
     inputs_list: List[Dict[str, Any]] = [
-        {"role": "source", "name": source_basename, "path": source_rel, "sha256": compute_artifact_hash(source_dest) or _sha256_text(text)}
+        {"role": "source", "name": source_basename, "path": source_rel, "sha256": compute_input_hash(source_dest) or ""}
     ]
     preprocessed_path = out_path / INPUTS_SOURCE / "preprocessed.sas"
     if preprocessed_path.exists():
         preprocessed_rel = bundle_relative_path(preprocessed_path, out_path)
-        h = compute_artifact_hash(preprocessed_path)
+        h = compute_input_hash(preprocessed_path)
         if h:
             inputs_list.append({"role": "preprocessed", "name": "preprocessed.sas", "path": preprocessed_rel, "sha256": h})
 
     report: Dict[str, Any] = {
-        "report_schema_version": "0.2",
+        "report_schema_version": "0.3",
         "status": status,
         "exit_code_bucket": _status_to_bucket(status, primary_error["code"] if primary_error else None),
         "primary_error": primary_error,

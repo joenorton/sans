@@ -17,7 +17,11 @@
     "timing"
   ],
   "properties": {
-    "report_schema_version": {"type": "string", "minLength": 1},
+    "report_schema_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Current version: 0.3. JSON artifacts are hashed using canonical JSON serialization."
+    },
     "status": {"enum": ["ok", "ok_warnings", "refused", "failed"]},
     "exit_code_bucket": {"enum": [0, 10, 20, 30, 31, 32, 50]},
     "primary_error": {

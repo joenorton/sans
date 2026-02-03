@@ -9,7 +9,7 @@ from time import perf_counter
 
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
 from .compiler import emit_check_artifacts
-from .hash_utils import compute_artifact_hash, compute_raw_hash, compute_report_sha256, _sha256_text
+from .hash_utils import compute_artifact_hash, compute_input_hash, compute_raw_hash, compute_report_sha256
 from .bundle import (
     ensure_bundle_layout,
     bundle_relative_path,
@@ -1675,9 +1675,7 @@ def run_script(
     expanded_path = out_path / INPUTS_SOURCE / "expanded.sans"
     expanded_path.write_text(irdoc_to_expanded_sans(irdoc), encoding="utf-8")
     expanded_rel = bundle_relative_path(expanded_path, out_path)
-    expanded_sha = compute_artifact_hash(expanded_path)
-    if not expanded_sha:
-        expanded_sha = _sha256_text(expanded_path.read_text(encoding="utf-8"))
+    expanded_sha = compute_input_hash(expanded_path) or ""
     report["inputs"].append({
         "role": "expanded",
         "name": "expanded.sans",
@@ -1703,9 +1701,7 @@ def run_script(
                 shutil.copy2(p, dest)
                 bindings_in[name] = str(dest)
                 rel = bundle_relative_path(dest, out_path)
-                h = compute_artifact_hash(dest)
-                if not h:
-                    h = compute_raw_hash(dest) or ""
+                h = compute_input_hash(dest) or ""
                 report["inputs"].append({"role": "datasource", "name": name, "path": rel, "sha256": h})
 
         result = execute_plan(

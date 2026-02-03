@@ -30,7 +30,7 @@ def _write_failed_report(out_dir: Path, message: str) -> int:
     report_path = out_dir / "report.json"
     plan_rel = bundle_relative_path(plan_path, out_dir)
     report = {
-        "report_schema_version": "0.2",
+        "report_schema_version": "0.3",
         "status": "failed",
         "exit_code_bucket": 50,
         "primary_error": {"code": "SANS_IO_ERROR", "message": message, "loc": None},
@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "verify":
-        from .hash_utils import compute_artifact_hash, compute_report_sha256
+        from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
         bundle_path = Path(args.bundle)
         if bundle_path.is_dir():
             report_path = bundle_path / "report.json"
@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"failed: input file missing: {path}")
                 return 1
             if expected:
-                actual = compute_artifact_hash(path)
+                actual = compute_input_hash(path)
                 if actual != expected:
                     print(f"failed: input hash mismatch for {path}")
                     return 1

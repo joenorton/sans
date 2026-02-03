@@ -1,8 +1,9 @@
 """
-Golden / acceptance tests for bundle and report contract (v0.2).
+Golden / acceptance tests for bundle and report contract (v0.3).
 Locks: paths canonical, report.json not in report, inputs/artifacts/outputs separation,
 hashes required, report_schema_version, expanded in inputs.
 """
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -134,7 +135,7 @@ def test_hashes_required(tmp_path):
 
 
 def test_report_schema_version_and_expanded_in_inputs(tmp_path):
-    """Report has report_schema_version (e.g. 0.2). expanded.sans appears in inputs[] with role=expanded, not in artifacts[]."""
+    """Report has report_schema_version (e.g. 0.3). expanded.sans appears in inputs[] with role=expanded, not in artifacts[]."""
     script = "data out; set in; run;"
     (tmp_path / "s.sas").write_text(script, encoding="utf-8")
     in_csv = tmp_path / "in.csv"
@@ -162,3 +163,28 @@ def test_runtime_has_no_outputs_array(tmp_path):
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     runtime = report.get("runtime") or {}
     assert "outputs" not in runtime, "runtime must not have outputs array"
+
+
+def test_source_input_hash_matches_bundle_bytes(tmp_path):
+    fixture = Path(__file__).resolve().parent / "fixtures" / "analysis.sas"
+    script_text = fixture.read_text(encoding="utf-8")
+    normalized = script_text.replace("\r\n", "\n").replace("\r", "\n")
+    crlf_bytes = normalized.replace("\n", "\r\n").encode("utf-8")
+
+    script_path = tmp_path / "analysis.sas"
+    script_path.write_bytes(crlf_bytes)
+    out_dir = tmp_path / "out"
+
+    ret = main(["check", str(script_path), "--out", str(out_dir), "--tables", "in"])
+    assert ret == 0
+
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    source_entries = [i for i in report.get("inputs", []) if i.get("role") == "source"]
+    assert source_entries, "expected source input entry"
+    source_entry = source_entries[0]
+
+    bundle_path = out_dir / source_entry["path"]
+    assert bundle_path.exists(), "materialized source file missing"
+    assert bundle_path.read_bytes() == script_path.read_bytes(), "source bytes must be preserved in bundle"
+    expected_hash = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+    assert source_entry["sha256"] == expected_hash

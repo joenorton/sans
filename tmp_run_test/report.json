@@ -1,5 +1,5 @@
 {
-  "report_schema_version": "0.2",
+  "report_schema_version": "0.3",
   "status": "ok",
   "exit_code_bucket": 0,
   "primary_error": null,
@@ -34,17 +34,17 @@
     {
       "name": "plan.ir.json",
       "path": "artifacts/plan.ir.json",
-      "sha256": "0efa952b36133c5f436a6414fc9af0c754e50c4edfdbe7266fd9ad096220296b"
+      "sha256": "79456ff1c2b803bdc156298b8c3769ae3d489dc8a8a7ea2fe8340eacbf995909"
     },
     {
       "name": "registry.candidate.json",
       "path": "artifacts/registry.candidate.json",
-      "sha256": "c18e6d4612049c9afe20c8bde871c9f9d50edd6fbcaed354fbe5b67494f1303c"
+      "sha256": "c070c9e6430a962d354f689a8a1daef6fd34b497bf701a4765612b3618025af2"
     },
     {
       "name": "runtime.evidence.json",
       "path": "artifacts/runtime.evidence.json",
-      "sha256": "1266e6ac81546c43b73fb58ad939c8568f596d4a4d3f228acb705b7d38a625ea"
+      "sha256": "a96b62a75f9b04f8d6f2d53f3125596fc43e06d2660ba4c06c0c61e232b83948"
     }
   ],
   "outputs": [
@@ -79,7 +79,7 @@
     "validate_ms": 0,
     "execute_ms": 1
   },
-  "report_sha256": "b6a9a6e1b7eeb39cfe4a082ba7238acca70939e81f0b41a6ad583e035c0a7248",
+  "report_sha256": "743da61b3d780a8bcbc544c927822db17b5d42a38907d7da21deafb07c8356d4",
   "runtime": {
     "status": "ok",
     "timing": {

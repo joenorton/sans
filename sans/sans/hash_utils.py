@@ -43,6 +43,22 @@ def _canonicalize_text(path: Path) -> bytes:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text.encode("utf-8")
 
+def compute_canonical_json_sha256(path: Path) -> Optional[str]:
+    """
+    Compute SHA-256 for a JSON artifact using canonical JSON serialization:
+    - parse as UTF-8 JSON
+    - json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    - UTF-8 encode
+    """
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 def compute_raw_hash(path: Path) -> Optional[str]:
     """Computes the raw SHA-256 hash of a file's bytes."""
     if not path.exists():
@@ -53,11 +69,29 @@ def compute_raw_hash(path: Path) -> Optional[str]:
     except OSError:
         return None
 
+def compute_input_hash(path: Path) -> Optional[str]:
+    """
+    Compute SHA-256 for report inputs.
+    - JSON: canonical JSON hash (v0.3 contract)
+    - Non-JSON: raw bytes (no canonicalization)
+    """
+    if not path.exists():
+        return None
+    if path.suffix.lower() == ".json":
+        try:
+            canonical_hash = compute_canonical_json_sha256(path)
+            if canonical_hash:
+                return canonical_hash
+        except Exception:
+            pass
+    return compute_raw_hash(path)
+
 def compute_artifact_hash(path: Path) -> Optional[str]:
     """
     Computes a deterministic hash of a file.
     - If CSV: canonicalize content then hash.
-    - If text (sas, json, txt...): canonicalize line endings.
+    - If JSON: canonicalize JSON (sort_keys=True, separators=(",", ":"), ensure_ascii=False) then hash.
+    - If text (sas, txt...): canonicalize line endings.
     - If other: hash raw bytes.
     """
     if not path.exists():
@@ -72,8 +106,17 @@ def compute_artifact_hash(path: Path) -> Optional[str]:
         except Exception:
             # Fallback to text canonicalization if CSV parsing fails
             pass
+
+    if suffix == ".json":
+        try:
+            canonical_hash = compute_canonical_json_sha256(path)
+            if canonical_hash:
+                return canonical_hash
+        except Exception:
+            # Fallback to text or raw bytes
+            pass
             
-    if suffix in {".sas", ".json", ".txt", ".md", ".toml", ".yaml", ".yml"}:
+    if suffix in {".sas", ".txt", ".md", ".toml", ".yaml", ".yml"}:
         try:
             data = _canonicalize_text(path)
             return hashlib.sha256(data).hexdigest()
