@@ -21,14 +21,21 @@ def _parse_tables(tables_arg: str | None) -> set[str] | None:
 def _write_failed_report(out_dir: Path, message: str) -> int:
     from .bundle import ensure_bundle_layout, bundle_relative_path, ARTIFACTS
     from .hash_utils import compute_artifact_hash, compute_report_sha256
+    from .graph import write_graph_json
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     ensure_bundle_layout(out_dir)
     plan_path = out_dir / ARTIFACTS / "plan.ir.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps({"steps": [], "tables": [], "table_facts": {}}, indent=2), encoding="utf-8")
+    graph_path = out_dir / ARTIFACTS / "graph.json"
+    write_graph_json(
+        {"schema_version": 1, "producer": {"name": "sans", "version": _engine_version}, "nodes": [], "edges": []},
+        graph_path,
+    )
     report_path = out_dir / "report.json"
     plan_rel = bundle_relative_path(plan_path, out_dir)
+    graph_rel = bundle_relative_path(graph_path, out_dir)
     report = {
         "report_schema_version": "0.3",
         "status": "failed",
@@ -38,6 +45,7 @@ def _write_failed_report(out_dir: Path, message: str) -> int:
         "inputs": [],
         "artifacts": [
             {"name": "plan.ir.json", "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""},
+            {"name": "graph.json", "path": graph_rel, "sha256": compute_artifact_hash(graph_path) or ""},
         ],
         "outputs": [],
         "plan_path": plan_rel,

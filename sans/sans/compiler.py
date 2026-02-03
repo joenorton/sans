@@ -23,6 +23,7 @@ from . import __version__ as _engine_version
 
 from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
 from .bundle import ensure_bundle_layout, bundle_relative_path, INPUTS_SOURCE, ARTIFACTS
+from .graph import build_graph, write_graph_json
 from .sans_script import SansScriptError, lower_script, parse_sans_script
 from .sans_script.canon import compute_step_id, compute_transform_id
 
@@ -443,6 +444,10 @@ def emit_check_artifacts(
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(_irdoc_to_dict(irdoc), indent=2), encoding="utf-8")
 
+    graph_path = out_path / ARTIFACTS / "graph.json"
+    graph = build_graph(irdoc, producer={"name": "sans", "version": _engine_version})
+    write_graph_json(graph, graph_path)
+
     source_basename = Path(file_name).name or "script"
     source_dest = out_path / INPUTS_SOURCE / source_basename
     source_path = Path(file_name)
@@ -468,6 +473,7 @@ def emit_check_artifacts(
         status = "ok_warnings"
 
     plan_rel = bundle_relative_path(plan_path, out_path)
+    graph_rel = bundle_relative_path(graph_path, out_path)
     source_rel = bundle_relative_path(source_dest, out_path)
     inputs_list: List[Dict[str, Any]] = [
         {"role": "source", "name": source_basename, "path": source_rel, "sha256": compute_input_hash(source_dest) or ""}
@@ -487,7 +493,8 @@ def emit_check_artifacts(
         "diagnostics": diagnostics,
         "inputs": inputs_list,
         "artifacts": [
-            {"name": plan_name, "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""}
+            {"name": plan_name, "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""},
+            {"name": "graph.json", "path": graph_rel, "sha256": compute_artifact_hash(graph_path) or ""},
         ],
         "outputs": [],
         "plan_path": plan_rel,
