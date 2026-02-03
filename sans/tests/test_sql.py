@@ -145,7 +145,7 @@ def test_proc_sql_left_join_null_fill(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "val", "extra"]
@@ -179,7 +179,7 @@ def test_proc_sql_groupby_aggregate(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "nrec", "mean_val"]

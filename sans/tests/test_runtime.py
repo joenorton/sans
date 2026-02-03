@@ -43,15 +43,16 @@ def test_run_hello_world(tmp_path):
 
     assert report["status"] == "ok"
     assert report["runtime"]["status"] == "ok"
-    assert (tmp_path / "plan.ir.json").exists()
+    assert (tmp_path / "artifacts" / "plan.ir.json").exists()
     assert (tmp_path / "report.json").exists()
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
-    runtime_outputs = report["runtime"]["outputs"]
-    assert runtime_outputs[0]["table"] == "out"
-    assert runtime_outputs[0]["rows"] == 2
-    assert runtime_outputs[0]["columns"] == ["a", "b", "c"]
+    outputs_list = report.get("outputs", [])
+    assert len(outputs_list) >= 1
+    assert outputs_list[0]["name"] == "out"
+    assert outputs_list[0]["rows"] == 2
+    assert outputs_list[0]["columns"] == ["a", "b", "c"]
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
@@ -91,7 +92,7 @@ def test_run_proc_sort_ok(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -132,7 +133,7 @@ def test_run_coalesce_ok(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["a", "b", "c"]
@@ -210,7 +211,7 @@ def test_run_merge_by_carries_values(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -259,7 +260,7 @@ def test_run_by_first_outputs_only_first(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -303,7 +304,7 @@ def test_run_if_then_else_with_ne(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -352,7 +353,7 @@ def test_run_filter_on_last_flag(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -395,7 +396,7 @@ def test_run_comparison_keywords_in_filter(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -437,7 +438,7 @@ def test_run_sort_is_stable(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -484,7 +485,7 @@ def test_run_retain_persists_values(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -527,7 +528,7 @@ def test_run_missing_comparison_filters_out(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -584,8 +585,8 @@ def test_run_is_deterministic(tmp_path):
     assert report_a["status"] == "ok"
     assert report_b["status"] == "ok"
 
-    out_csv_a = out_a / "out.csv"
-    out_csv_b = out_b / "out.csv"
+    out_csv_a = out_a / "outputs" / "out.csv"
+    out_csv_b = out_b / "outputs" / "out.csv"
     assert out_csv_a.exists()
     assert out_csv_b.exists()
 
@@ -625,7 +626,7 @@ def test_run_keep_preserves_column_order(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -679,7 +680,7 @@ def test_run_merge_in_flags(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -729,7 +730,7 @@ def test_run_by_group_multikey_last(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -773,7 +774,7 @@ def test_run_explicit_output_suppresses_default(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -815,7 +816,7 @@ def test_run_missing_arithmetic_yields_missing(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -857,7 +858,7 @@ def test_run_dataset_options_applied_at_read_time(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -901,7 +902,7 @@ def test_run_proc_transpose_last_wins(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "lb_wide.csv"
+    out_csv = tmp_path / "outputs" / "lb_wide.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -955,7 +956,7 @@ def test_run_merge_dataset_where_option(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -993,7 +994,7 @@ def test_run_dataset_options_drop_and_rename(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -1031,7 +1032,7 @@ def test_run_dataset_where_string_and_missing(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -1155,7 +1156,7 @@ def test_run_merge_mixed_dataset_options(tmp_path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:
@@ -1277,7 +1278,7 @@ def test_run_cast_sans(tmp_path):
     )
     assert report["status"] == "ok"
     assert report["runtime"]["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.exists()
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
@@ -1287,7 +1288,7 @@ def test_run_cast_sans(tmp_path):
     assert rows[1][0] == "1"
     assert rows[2][0] == "3"
     # step_evidence in runtime.evidence.json includes cast step with cast_failures and nulled
-    evidence_path = tmp_path / "runtime.evidence.json"
+    evidence_path = tmp_path / "artifacts" / "runtime.evidence.json"
     assert evidence_path.exists()
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     step_evidence = evidence.get("step_evidence") or []

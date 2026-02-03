@@ -102,8 +102,8 @@ def test_hello_cosmos_end_to_end(tmp_path: Path):
     run_result = _run_cmd(run_args, _project_root())
     assert run_result.returncode == 0, run_result.stdout + run_result.stderr
 
-    named_csv = out_dir / "lb_named.csv"
-    summary_csv = out_dir / "lb_summary.csv"
+    named_csv = out_dir / "outputs" / "lb_named.csv"
+    summary_csv = out_dir / "outputs" / "lb_summary.csv"
     assert named_csv.exists()
     assert summary_csv.exists()
 

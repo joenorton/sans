@@ -36,7 +36,7 @@ def test_windows_newline_parity(tmp_path):
         out_dir=tmp_path
     )
     
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     out_content = out_csv.read_text(encoding="utf-8")
     # Verify our output always uses \n
     assert "\r\n" not in out_content
@@ -54,7 +54,7 @@ def test_sort_missing_values(tmp_path):
     script = "proc sort data=in out=out; by a; run;"
     run_script(text=script, file_name="sort.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)   
 
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     rows = out_csv.read_text(encoding="utf-8").splitlines()
     # Header, then None (empty), then 1, then 2
     # Note: csv.writer on single-column empty string writes '""'
@@ -72,7 +72,7 @@ def test_where_missing_comparisons(tmp_path):
     script = "data out; set in; if a < 5; run;"
     run_script(text=script, file_name="where.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)  
 
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     rows = out_csv.read_text(encoding="utf-8").splitlines()
     assert rows == ["a", '""'] # Only the None row remains if 5 is not < 5
 def test_duplicate_table_binding_fails(tmp_path):
@@ -93,7 +93,7 @@ def test_empty_csv_behavior(tmp_path):
     report = run_script(text=script, file_name="empty.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)
     
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     assert out_csv.read_text(encoding="utf-8") == ""
 
 def test_decimal_precision(tmp_path):
@@ -103,7 +103,7 @@ def test_decimal_precision(tmp_path):
     script = "data out; set in; b = a + 1; run;"
     run_script(text=script, file_name="prec.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)
     
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     content = out_csv.read_text(encoding="utf-8")
     assert "2.00000000000000000001" in content
 

@@ -47,13 +47,13 @@ def test_macro_m0_and_control_flow(tmp_path):
     assert ret == 0
     
     # 4. Verify preprocessed.sas exists
-    preprocessed_path = out_dir / "preprocessed.sas"
+    preprocessed_path = out_dir / "inputs" / "source" / "preprocessed.sas"
     assert preprocessed_path.exists()
     prep_text = preprocessed_path.read_text(encoding="utf-8")
     assert "z = x + y + 100;" in prep_text
     
     # 5. Verify Output
-    out_csv = out_dir / "out.csv"
+    out_csv = out_dir / "outputs" / "out.csv"
     assert out_csv.exists()
     
     with out_csv.open("r", encoding="utf-8", newline="") as f:

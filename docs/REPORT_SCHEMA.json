@@ -3,11 +3,13 @@
   "title": "sans report.json",
   "type": "object",
   "required": [
+    "report_schema_version",
     "status",
     "exit_code_bucket",
     "primary_error",
     "diagnostics",
     "inputs",
+    "artifacts",
     "outputs",
     "plan_path",
     "engine",
@@ -15,6 +17,7 @@
     "timing"
   ],
   "properties": {
+    "report_schema_version": {"type": "string", "minLength": 1},
     "status": {"enum": ["ok", "ok_warnings", "refused", "failed"]},
     "exit_code_bucket": {"enum": [0, 10, 20, 30, 31, 32, 50]},
     "primary_error": {
@@ -29,13 +32,18 @@
     },
     "inputs": {
       "type": "array",
-      "items": {"$ref": "#/definitions/io"}
+      "items": {"$ref": "#/definitions/input"}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/artifact"}
     },
     "outputs": {
       "type": "array",
-      "items": {"$ref": "#/definitions/io"}
+      "items": {"$ref": "#/definitions/output"}
     },
     "plan_path": {"type": "string"},
+    "report_sha256": {"type": "string"},
     "engine": {
       "type": "object",
       "required": ["name", "version"],
@@ -56,13 +64,9 @@
     },
     "runtime": {
       "type": "object",
-      "required": ["status", "outputs", "timing"],
+      "required": ["status", "timing"],
       "properties": {
         "status": {"enum": ["ok", "refused", "failed"]},
-        "outputs": {
-          "type": "array",
-          "items": {"$ref": "#/definitions/runtime_output"}
-        },
         "timing": {
           "type": "object",
           "required": ["execute_ms"],
@@ -97,23 +101,35 @@
         "loc": {"$ref": "#/definitions/loc"}
       }
     },
-    "io": {
+    "input": {
       "type": "object",
-      "required": ["path"],
+      "required": ["role", "name", "path", "sha256"],
       "properties": {
-        "path": {"type": "string"},
-        "sha256": {"type": ["string", "null"]}
+        "role": {"type": "string", "enum": ["source", "preprocessed", "expanded", "datasource"]},
+        "name": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "minLength": 1}
       }
     },
-    "runtime_output": {
+    "artifact": {
       "type": "object",
-      "required": ["path", "table", "rows", "columns"],
+      "required": ["name", "path", "sha256"],
       "properties": {
-        "path": {"type": "string"},
-        "table": {"type": "string"},
-        "rows": {"type": "integer"},
+        "name": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "minLength": 1}
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["name", "path", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "minLength": 1},
+        "rows": {"type": ["integer", "null"]},
         "columns": {
-          "type": "array",
+          "type": ["array", "null"],
           "items": {"type": "string"}
         }
       }

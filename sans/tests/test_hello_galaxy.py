@@ -145,7 +145,7 @@ def test_hello_galaxy_end_to_end(tmp_path: Path):
     run_result = _run_cmd(run_args, _project_root())
     assert run_result.returncode == 0, run_result.stdout + run_result.stderr
 
-    out_csv = out_dir / "lb_final.csv"
+    out_csv = out_dir / "outputs" / "lb_final.csv"
     assert out_csv.exists()
 
     with out_csv.open("r", encoding="utf-8", newline="") as f:

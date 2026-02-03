@@ -8,5 +8,5 @@ ls out | select Name
 
 # Show a snippet of the evidence
 echo "`nSnippet of runtime.evidence.json (Row Counts):"
-$evidence = Get-Content out/runtime.evidence.json | ConvertFrom-Json
+$evidence = Get-Content out/artifacts/runtime.evidence.json | ConvertFrom-Json
 $evidence.step_evidence | select step_index, op, row_counts

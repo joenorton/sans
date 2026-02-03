@@ -41,7 +41,7 @@ def test_gold_control_flow_do_end_nested(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "y"],
         ["1", "6"],
@@ -101,7 +101,7 @@ def test_gold_control_flow_loop_by_step(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["i"],
         ["1"],
@@ -135,7 +135,7 @@ def test_gold_control_flow_loop_negative_step(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["i"],
         ["3"],

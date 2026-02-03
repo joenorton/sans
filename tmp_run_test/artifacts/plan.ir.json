@@ -1,0 +1,52 @@
+{
+  "steps": [
+    {
+      "kind": "op",
+      "loc": {
+        "file": "t.sas",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "op": "compute",
+      "inputs": [
+        "in"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "params": {
+        "assign": [
+          {
+            "col": "c",
+            "expr": {
+              "type": "binop",
+              "op": "+",
+              "left": {
+                "type": "col",
+                "name": "a"
+              },
+              "right": {
+                "type": "col",
+                "name": "b"
+              }
+            }
+          }
+        ]
+      },
+      "transform_id": "c90d105f31d1de3685242ba76b32958d5624ae68837ea8005d94b2fcf8ab5737",
+      "step_id": "7f899d3adb32f7b4312736e2533bfebf565d478dda921ce977f6c558eb22cf63"
+    }
+  ],
+  "tables": [
+    "in"
+  ],
+  "table_facts": {
+    "in": {
+      "sorted_by": null
+    },
+    "out": {
+      "sorted_by": null
+    }
+  },
+  "datasources": {}
+}

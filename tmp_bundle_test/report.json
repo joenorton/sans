@@ -1,0 +1,49 @@
+{
+  "report_schema_version": "0.2",
+  "status": "ok",
+  "exit_code_bucket": 0,
+  "primary_error": null,
+  "diagnostics": [],
+  "inputs": [
+    {
+      "role": "source",
+      "name": "test.sas",
+      "path": "inputs/source/test.sas",
+      "sha256": "c6c03cc39e7ad75791eae8dc912685d3201123630a7c3e9980baf48b01681abf"
+    },
+    {
+      "role": "preprocessed",
+      "name": "preprocessed.sas",
+      "path": "inputs/source/preprocessed.sas",
+      "sha256": "c6c03cc39e7ad75791eae8dc912685d3201123630a7c3e9980baf48b01681abf"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "plan.ir.json",
+      "path": "artifacts/plan.ir.json",
+      "sha256": "d13c72afc2078c556f5ae3f6a48212591ee1a9f666728f701146707af1087839"
+    }
+  ],
+  "outputs": [],
+  "plan_path": "artifacts/plan.ir.json",
+  "engine": {
+    "name": "sans",
+    "version": "0.1.0"
+  },
+  "settings": {
+    "strict": true,
+    "allow_approx": false,
+    "tolerance": null,
+    "tables": [
+      "in"
+    ],
+    "datasources": []
+  },
+  "timing": {
+    "compile_ms": 2,
+    "validate_ms": 0,
+    "execute_ms": null
+  },
+  "report_sha256": "758fceba00ec26b68140c0784cb75c77c43f0ea4cfe9a2cae6968e367f62c87a"
+}

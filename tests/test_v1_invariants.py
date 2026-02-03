@@ -19,7 +19,7 @@ def test_csv_newlines_lf(tmp_path):
     in_csv.write_text("a,b\n1,2", encoding="utf-8")
     script = "data out; set in; run;"
     run_script(script, "test.sas", {"in": str(in_csv)}, tmp_path)
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     content = out_csv.read_bytes()
     assert b"\r\n" not in content
     assert b"\n" in content
@@ -36,7 +36,7 @@ def test_sort_missing_first(tmp_path):
     
     script = "proc sort data=in out=out; by a; run;"
     run_script(script, "sort.sas", {"in": str(in_csv)}, tmp_path)
-    rows = (tmp_path / "out.csv").read_text(encoding="utf-8").splitlines()
+    rows = (tmp_path / "outputs" / "out.csv").read_text(encoding="utf-8").splitlines()
     # Missing sorts first (index 1 after header)
     assert rows[1] == '""'
 
@@ -49,7 +49,7 @@ def test_where_missing_comparisons(tmp_path):
         writer.writerow(["5"])
     script = "data out; set in; if a < 5; run;"
     run_script(script, "where.sas", {"in": str(in_csv)}, tmp_path)
-    rows = (tmp_path / "out.csv").read_text(encoding="utf-8").splitlines()
+    rows = (tmp_path / "outputs" / "out.csv").read_text(encoding="utf-8").splitlines()
     assert rows == ["a", '""']
 
 def test_parse_leading_zero_is_string():
@@ -63,7 +63,7 @@ def test_decimal_precision_stable(tmp_path):
     in_csv.write_text(f"a\n{long_val}", encoding="utf-8")
     script = "data out; set in; b = a; run;"
     run_script(script, "prec.sas", {"in": str(in_csv)}, tmp_path)
-    content = (tmp_path / "out.csv").read_text(encoding="utf-8")
+    content = (tmp_path / "outputs" / "out.csv").read_text(encoding="utf-8")
     assert long_val in content
 
 def test_duplicate_table_binding_errors(tmp_path):
@@ -100,8 +100,8 @@ def test_artifact_hashes_stable_for_same_inputs(tmp_path):
     r1 = run_script(script, "s.sas", {"in": str(in_csv)}, out1)
     r2 = run_script(script, "s.sas", {"in": str(in_csv)}, out2)
     
-    h1 = [o["sha256"] for o in r1["outputs"] if "plan.ir.json" in o["path"]]
-    h2 = [o["sha256"] for o in r2["outputs"] if "plan.ir.json" in o["path"]]
+    h1 = [a["sha256"] for a in r1.get("artifacts", []) if "plan.ir.json" in (a.get("path") or "")]
+    h2 = [a["sha256"] for a in r2.get("artifacts", []) if "plan.ir.json" in (a.get("path") or "")]
     assert h1 == h2
 
 def test_double_run_determinism(tmp_path):
@@ -119,21 +119,20 @@ def test_double_run_determinism(tmp_path):
     assert ret2 == 0
 
     # 1) semantic artifact determinism: plan.ir.json must match byte-for-byte.
-    p1 = (out1 / "plan.ir.json").read_text(encoding="utf-8")
-    p2 = (out2 / "plan.ir.json").read_text(encoding="utf-8")
+    p1 = (out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8")
+    p2 = (out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8")
     assert p1 == p2
 
     # optional: expanded.sans is your canonical human form; compare it too.
-    expanded1 = out1 / "expanded.sans"
-    expanded2 = out2 / "expanded.sans"
+    expanded1 = out1 / "inputs" / "source" / "expanded.sans"
+    expanded2 = out2 / "inputs" / "source" / "expanded.sans"
     assert expanded1.exists()
     assert expanded2.exists()
     assert expanded1.read_text(encoding="utf-8") == expanded2.read_text(encoding="utf-8")
 
-
     # 2) output artifact determinism: out.csv bytes must match.
-    o1 = (out1 / "out.csv").read_bytes()
-    o2 = (out2 / "out.csv").read_bytes()
+    o1 = (out1 / "outputs" / "out.csv").read_bytes()
+    o2 = (out2 / "outputs" / "out.csv").read_bytes()
     assert o1 == o2
 
     # 3) report determinism foundation: each run must verify under the canonical hash contract.

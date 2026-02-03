@@ -36,7 +36,7 @@ def test_emit_check_artifacts_success():
         )
 
         assert report["status"] == "ok"
-        plan = json.loads((temp_dir / "plan.ir.json").read_text(encoding="utf-8"))
+        plan = json.loads((temp_dir / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
         report_json = json.loads((temp_dir / "report.json").read_text(encoding="utf-8"))
 
         assert report_json["status"] == "ok"
@@ -60,7 +60,7 @@ def test_emit_check_artifacts_refusal():
         assert report["status"] == "refused"
         assert report["primary_error"]["code"] == "SANS_PARSE_UNSUPPORTED_STATEMENT"
 
-        plan = json.loads((temp_dir / "plan.ir.json").read_text(encoding="utf-8"))
+        plan = json.loads((temp_dir / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
         assert len(plan["steps"]) == 1
         assert plan["steps"][0]["kind"] == "block"
     finally:
@@ -84,7 +84,7 @@ def test_emit_check_artifacts_refusal_plan_matches_report():
         )
         assert report["status"] == "refused"
         primary = report["primary_error"]
-        plan = json.loads((temp_dir / "plan.ir.json").read_text(encoding="utf-8"))
+        plan = json.loads((temp_dir / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
         assert plan["steps"][0]["kind"] == "block"
         assert plan["steps"][0]["code"] == primary["code"]
         assert plan["steps"][0]["loc"] == primary["loc"]

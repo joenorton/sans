@@ -22,6 +22,7 @@ from . import __version__ as _engine_version
 
 
 from .hash_utils import compute_artifact_hash, _sha256_text, compute_report_sha256
+from .bundle import ensure_bundle_layout, bundle_relative_path, INPUTS_SOURCE, ARTIFACTS
 from .sans_script import SansScriptError, lower_script, parse_sans_script
 from .sans_script.canon import compute_step_id, compute_transform_id
 
@@ -357,8 +358,9 @@ def emit_check_artifacts(
     Compile + validate, then emit plan and report artifacts.
     Returns the IRDoc (validated if possible) and report dict.
     """
-    out_path = Path(out_dir)
+    out_path = Path(out_dir).resolve()
     out_path.mkdir(parents=True, exist_ok=True)
+    ensure_bundle_layout(out_path)
     use_sans_script = Path(file_name).suffix.lower() == ".sans"
 
     if not use_sans_script:
@@ -370,7 +372,7 @@ def emit_check_artifacts(
                 allow_absolute_includes=allow_absolute_includes,
                 allow_include_escape=allow_include_escape,
             )
-            (out_path / "preprocessed.sas").write_text(processed_text, encoding="utf-8")
+            (out_path / INPUTS_SOURCE / "preprocessed.sas").write_text(processed_text, encoding="utf-8")
         except MacroError:
             # We allow compilation to handle the error and report it in the IR
             pass
@@ -437,10 +439,15 @@ def emit_check_artifacts(
             if isinstance(step, UnknownBlockStep):
                 diagnostics.append(_error_to_dict(step))
 
-    plan_path = out_path / plan_name
-    report_path = out_path / report_name
-
+    plan_path = out_path / ARTIFACTS / plan_name
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(_irdoc_to_dict(irdoc), indent=2), encoding="utf-8")
+
+    source_basename = Path(file_name).name or "script"
+    source_dest = out_path / INPUTS_SOURCE / source_basename
+    source_dest.write_text(text, encoding="utf-8")
+
+    report_path = out_path / report_name
 
     primary_error: Optional[Dict[str, Any]] = None
     status = "ok"
@@ -456,19 +463,30 @@ def emit_check_artifacts(
     elif diagnostics:
         status = "ok_warnings"
 
+    plan_rel = bundle_relative_path(plan_path, out_path)
+    source_rel = bundle_relative_path(source_dest, out_path)
+    inputs_list: List[Dict[str, Any]] = [
+        {"role": "source", "name": source_basename, "path": source_rel, "sha256": compute_artifact_hash(source_dest) or _sha256_text(text)}
+    ]
+    preprocessed_path = out_path / INPUTS_SOURCE / "preprocessed.sas"
+    if preprocessed_path.exists():
+        preprocessed_rel = bundle_relative_path(preprocessed_path, out_path)
+        h = compute_artifact_hash(preprocessed_path)
+        if h:
+            inputs_list.append({"role": "preprocessed", "name": "preprocessed.sas", "path": preprocessed_rel, "sha256": h})
+
     report: Dict[str, Any] = {
+        "report_schema_version": "0.2",
         "status": status,
         "exit_code_bucket": _status_to_bucket(status, primary_error["code"] if primary_error else None),
         "primary_error": primary_error,
         "diagnostics": diagnostics,
-        "inputs": [
-            {"path": Path(file_name).as_posix(), "sha256": _sha256_text(text)}
+        "inputs": inputs_list,
+        "artifacts": [
+            {"name": plan_name, "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""}
         ],
-        "outputs": [
-            {"path": plan_path.as_posix(), "sha256": compute_artifact_hash(plan_path)},
-            {"path": report_path.as_posix(), "sha256": None},
-        ],
-        "plan_path": plan_path.as_posix(),
+        "outputs": [],
+        "plan_path": plan_rel,
         "engine": {"name": "sans", "version": _engine_version},
         "settings": {
             "strict": strict,
@@ -480,10 +498,10 @@ def emit_check_artifacts(
         "timing": {
             "compile_ms": compile_ms,
             "validate_ms": validate_ms,
+            "execute_ms": None,
         },
     }
 
     report["report_sha256"] = compute_report_sha256(report, out_path)
-    report["outputs"][1]["sha256"] = None
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return irdoc, report

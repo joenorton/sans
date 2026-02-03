@@ -13,9 +13,9 @@ def test_contract_identities(tmp_path):
     
     run_script(script, "test.sas", {"in": str(in_csv)}, out_dir)
     
-    plan_path = out_dir / "plan.ir.json"
-    registry_path = out_dir / "registry.candidate.json"
-    evidence_path = out_dir / "runtime.evidence.json"
+    plan_path = out_dir / "artifacts" / "plan.ir.json"
+    registry_path = out_dir / "artifacts" / "registry.candidate.json"
+    evidence_path = out_dir / "artifacts" / "runtime.evidence.json"
     
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -69,8 +69,8 @@ def test_identity_stability(tmp_path):
     run_script(script, "test.sas", {"in": str(in_csv)}, out1)
     run_script(script, "test.sas", {"in": str(in_csv)}, out2)
     
-    p1 = json.loads((out1 / "plan.ir.json").read_text(encoding="utf-8"))
-    p2 = json.loads((out2 / "plan.ir.json").read_text(encoding="utf-8"))
+    p1 = json.loads((out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
+    p2 = json.loads((out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
     
     assert p1["steps"][0]["transform_id"] == p2["steps"][0]["transform_id"]
     assert p1["steps"][0]["step_id"] == p2["steps"][0]["step_id"]
@@ -91,8 +91,8 @@ def test_wiring_vs_transform_id(tmp_path):
     run_script(script1, "s1.sas", {"in1": str(in1)}, out1)
     run_script(script2, "s2.sas", {"in2": str(in2)}, out2)
     
-    p1 = json.loads((out1 / "plan.ir.json").read_text(encoding="utf-8"))
-    p2 = json.loads((out2 / "plan.ir.json").read_text(encoding="utf-8"))
+    p1 = json.loads((out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
+    p2 = json.loads((out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
     
     # Transform ID should be SAME (both are 'data_step' with same params)
     assert p1["steps"][0]["transform_id"] == p2["steps"][0]["transform_id"]
@@ -113,8 +113,8 @@ def test_params_change_transform_id(tmp_path):
     run_script(script1, "s1.sas", {"in": str(in_csv)}, out1)
     run_script(script2, "s2.sas", {"in": str(in_csv)}, out2)
     
-    p1 = json.loads((out1 / "plan.ir.json").read_text(encoding="utf-8"))
-    p2 = json.loads((out2 / "plan.ir.json").read_text(encoding="utf-8"))
+    p1 = json.loads((out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
+    p2 = json.loads((out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
     
     # Transform ID should be DIFFERENT
     assert p1["steps"][0]["transform_id"] != p2["steps"][0]["transform_id"]
@@ -129,7 +129,7 @@ def test_path_normalization(tmp_path):
     out_dir = tmp_path / "out"
     run_script(script, "test.sas", {"in": in_path_str}, out_dir)
     
-    evidence = json.loads((out_dir / "runtime.evidence.json").read_text(encoding="utf-8"))
+    evidence = json.loads((out_dir / "artifacts" / "runtime.evidence.json").read_text(encoding="utf-8"))
     
     # All paths in evidence must use forward slashes
     for inp in evidence["inputs"]:

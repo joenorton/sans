@@ -19,26 +19,33 @@ def _parse_tables(tables_arg: str | None) -> set[str] | None:
 
 
 def _write_failed_report(out_dir: Path, message: str) -> int:
+    from .bundle import ensure_bundle_layout, bundle_relative_path, ARTIFACTS
+    from .hash_utils import compute_artifact_hash, compute_report_sha256
+    out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    plan_path = out_dir / "plan.ir.json"
-    report_path = out_dir / "report.json"
-
+    ensure_bundle_layout(out_dir)
+    plan_path = out_dir / ARTIFACTS / "plan.ir.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps({"steps": [], "tables": [], "table_facts": {}}, indent=2), encoding="utf-8")
+    report_path = out_dir / "report.json"
+    plan_rel = bundle_relative_path(plan_path, out_dir)
     report = {
+        "report_schema_version": "0.2",
         "status": "failed",
         "exit_code_bucket": 50,
         "primary_error": {"code": "SANS_IO_ERROR", "message": message, "loc": None},
         "diagnostics": [],
         "inputs": [],
-        "outputs": [
-            {"path": str(plan_path), "sha256": None},
-            {"path": str(report_path), "sha256": None},
+        "artifacts": [
+            {"name": "plan.ir.json", "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""},
         ],
-        "plan_path": str(plan_path),
+        "outputs": [],
+        "plan_path": plan_rel,
         "engine": {"name": "sans", "version": _engine_version},
         "settings": {"strict": True, "allow_approx": False, "tolerance": None, "tables": []},
-        "timing": {"compile_ms": None, "validate_ms": None},
+        "timing": {"compile_ms": None, "validate_ms": None, "execute_ms": None},
     }
+    report["report_sha256"] = compute_report_sha256(report, out_dir)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"failed: {message}")
     return 50
@@ -126,34 +133,51 @@ def main(argv: list[str] | None = None) -> int:
                 print("failed: report hash mismatch")
                 return 1
 
-        # Check inputs (paths relative to bundle_root when not absolute)
+        # Check inputs (bundle-relative paths only)
         for inp in report.get("inputs", []):
             path_str = inp.get("path") or ""
-            path = (bundle_root / path_str) if not Path(path_str).is_absolute() else Path(path_str)
+            if Path(path_str).is_absolute():
+                print(f"failed: input path must be bundle-relative: {path_str}")
+                return 1
+            path = bundle_root / path_str
             expected = inp.get("sha256")
             if not path.exists():
                 print(f"failed: input file missing: {path}")
                 return 1
-            actual = compute_artifact_hash(path)
-            if actual != expected:
-                print(f"failed: input hash mismatch for {path}")
-                return 1
-
-        # Check outputs
-        reported_plan_path = report.get("plan_path")
-        for out in report.get("outputs", []):
-            path_str = out.get("path") or ""
-            path = (bundle_root / path_str) if not Path(path_str).is_absolute() else Path(path_str)
-            expected = out.get("sha256")
-
-            if reported_plan_path and path_str == reported_plan_path:
-                if not path.exists():
-                    print(f"failed: plan file missing at {path}")
+            if expected:
+                actual = compute_artifact_hash(path)
+                if actual != expected:
+                    print(f"failed: input hash mismatch for {path}")
                     return 1
 
-            if expected is None:
-                continue  # report.json entry has sha256=None; verified via report_sha256
+        # Check artifacts
+        for art in report.get("artifacts", []):
+            path_str = art.get("path") or ""
+            if Path(path_str).is_absolute():
+                print(f"failed: artifact path must be bundle-relative: {path_str}")
+                return 1
+            path = bundle_root / path_str
+            expected = art.get("sha256")
+            if not path.exists():
+                print(f"failed: artifact file missing: {path}")
+                return 1
+            if expected:
+                actual = compute_artifact_hash(path)
+                if actual != expected:
+                    print(f"failed: artifact hash mismatch for {path}")
+                    return 1
 
+        # Check outputs (report.json is not listed in any array)
+        for out in report.get("outputs", []):
+            path_str = out.get("path") or ""
+            if Path(path_str).is_absolute():
+                print(f"failed: output path must be bundle-relative: {path_str}")
+                return 1
+            path = bundle_root / path_str
+            expected = out.get("sha256")
+            if not expected:
+                print(f"failed: output entry missing sha256: {path_str}")
+                return 1
             if not path.exists():
                 print(f"failed: output file missing: {path}")
                 return 1

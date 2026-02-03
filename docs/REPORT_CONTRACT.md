@@ -1,40 +1,38 @@
 ## REPORT_CONTRACT (report.json)
 
 Purpose
-- Define the stable, machine-actionable report payload emitted by `sans check`.
+- Define the stable, machine-actionable report payload emitted by `sans check` and `sans run`.
 - Keep downstream consumers insulated from internal changes.
 
 When it is written
-- Always. `sans check` writes both `plan.ir.json` and `report.json`.
+- Always. `sans check` writes both `plan.ir.json` (under `artifacts/`) and `report.json` at bundle root.
 
 Top-level fields
+- `report_schema_version`: string (e.g. `"0.2"`); bumped for breaking changes.
 - `status`: one of `ok`, `ok_warnings`, `refused`, `failed`.
 - `exit_code_bucket`: one of `0`, `10`, `20`, `30`, `31`, `32`, `50`.
 - `primary_error`: `{code, message, loc}` or `null`.
 - `diagnostics[]`: list of `{code, message, loc}` entries.
-- `inputs[]`: list of `{path, sha256?}`.
-- `outputs[]`: list of `{path, sha256?}`.
-- `plan_path`: path to the emitted `plan.ir.json`.
-- `report_sha256`: SHA-256 of the canonical report payload (used by `sans verify` for self-check). Optional in legacy reports.
+- `inputs[]`: list of `{role, name, path, sha256}`. Role is one of `source`, `preprocessed`, `expanded`, `datasource`. All paths bundle-relative, forward slashes only. **sha256 required** (non-null).
+- `artifacts[]`: list of `{name, path, sha256}` (e.g. plan.ir.json, registry.candidate.json, runtime.evidence.json). **sha256 required** (non-null). report.json is **not** listed in any array.
+- `outputs[]`: list of `{name, path, sha256, rows?, columns?}` (user-facing table files only). Path under `outputs/`; subpaths preserved. **sha256 required** (non-null).
+- `plan_path`: bundle-relative path to plan (e.g. `artifacts/plan.ir.json`).
+- `report_sha256`: SHA-256 of the canonical report payload (used by `sans verify` for self-check).
 - `engine`: `{name, version}`.
 - `settings`: effective settings used for this run.
 - `timing`: `{compile_ms, validate_ms, execute_ms}` (values may be `null`).
-- `runtime`: `{status, outputs, timing}` when `sans run` executes.
+- `runtime`: `{status, timing}` when `sans run` executes. **No** `runtime.outputs`; use top-level `outputs[]` only.
 
-Runtime outputs (v0.1)
-- `runtime.outputs[]` entries include:
-  - `table` (name)
-  - `path` (csv path)
-  - `rows` (row count)
-  - `columns` (column list)
+Paths
+- All paths in report and evidence are **bundle-relative**, forward slashes only. Report and evidence must **never** contain paths outside the bundle; if any file would be outside, the run errors (no exceptions).
+
+Determinism
+- Report arrays `inputs`, `artifacts`, `outputs` are canonically sorted (e.g. by path) in `canonicalize_report` for determinism.
 
 Status and exit buckets
 - `ok` -> `0`
 - `ok_warnings` -> `10`
-- `refused` -> `30`/`31`/`32` depending on the primary error code:
-  - `SANS_PARSE_*` or `SANS_BLOCK_*` -> `30`
-  - `SANS_VALIDATE_*` -> `31`
-  - `SANS_CAP_*` -> `32`
+- `refused` -> `30`/`31`/`32` depending on the primary error code.
 - `failed` -> `50`
 
 Error payload shape
@@ -42,17 +40,13 @@ Error payload shape
 - `message`: human-readable message.
 - `loc`: `{file, line_start, line_end}` or `null` when unavailable.
 
-Settings
-Minimum fields currently emitted:
-- `strict` (bool)
-- `allow_approx` (bool)
-- `tolerance` (object or null)
-- `tables` (list of predeclared input table names)
-
-Standard output artifacts
-- `sans check`: `plan.ir.json`, `report.json`.
-- `sans run`: `plan.ir.json`, `report.json`, `expanded.sans` (canonical script form from IR), runtime table outputs (e.g. `out.csv`), `registry.candidate.json`, `runtime.evidence.json`. All listed in `outputs[]` with `sha256` (except `report.json`, which uses `report_sha256` for self-check).
+Bundle layout (v0.2)
+- `report.json` at bundle root (only file at root besides directory structure).
+- `inputs/source/`: analysis script, preprocessed.sas (if any), expanded.sans (if any).
+- `inputs/data/`: materialized datasource files (by logical name).
+- `artifacts/`: plan.ir.json, registry.candidate.json, runtime.evidence.json.
+- `outputs/`: user-facing table files (e.g. out.csv from save step).
 
 Notes
 - `diagnostics` may include non-fatal items in `ok_warnings`.
-- `outputs` always includes `plan.ir.json` and `report.json`; hashes are optional for `report.json` (see `report_sha256`).
+- `report.json` is not listed in `inputs`, `artifacts`, or `outputs`; use `report_sha256` for self-check.

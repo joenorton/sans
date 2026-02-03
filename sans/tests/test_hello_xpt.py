@@ -34,7 +34,7 @@ def test_hello_xpt_roundtrip(tmp_path):
     ])
     assert ret == 0
     
-    out1_xpt = out1_dir / "out.xpt"
+    out1_xpt = out1_dir / "outputs" / "out.xpt"
     assert out1_xpt.exists()
     
     # Verify XPT content (canonicalized string trim, missing numeric)
@@ -66,7 +66,7 @@ def test_hello_xpt_roundtrip(tmp_path):
     ])
     assert ret == 0
     
-    out2_csv = out2_dir / "final.csv"
+    out2_csv = out2_dir / "outputs" / "final.csv"
     assert out2_csv.exists()
     
     with out2_csv.open("r", encoding="utf-8", newline="") as f:
@@ -95,7 +95,7 @@ def test_xpt_determinism(tmp_path):
     main(["run", str(script_path), "--out", str(out_a), "--tables", f"source={in_csv}", "--format", "xpt"])
     main(["run", str(script_path), "--out", str(out_b), "--tables", f"source={in_csv}", "--format", "xpt"])
     
-    bytes_a = (out_a / "out.xpt").read_bytes()
-    bytes_b = (out_b / "out.xpt").read_bytes()
+    bytes_a = (out_a / "outputs" / "out.xpt").read_bytes()
+    bytes_b = (out_b / "outputs" / "out.xpt").read_bytes()
     
     assert bytes_a == bytes_b

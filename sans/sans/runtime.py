@@ -9,7 +9,16 @@ from time import perf_counter
 
 from .ir import IRDoc, OpStep, Step, UnknownBlockStep
 from .compiler import emit_check_artifacts
-from .hash_utils import compute_artifact_hash, compute_raw_hash, compute_report_sha256
+from .hash_utils import compute_artifact_hash, compute_raw_hash, compute_report_sha256, _sha256_text
+from .bundle import (
+    ensure_bundle_layout,
+    bundle_relative_path,
+    validate_save_path_under_outputs,
+    INPUTS_SOURCE,
+    INPUTS_DATA,
+    ARTIFACTS,
+    OUTPUTS,
+)
 from .sans_script import irdoc_to_expanded_sans
 from .sans_script.canon import compute_step_id, compute_transform_id
 from .xpt import load_xpt_with_warnings, dump_xpt, XptError
@@ -1234,7 +1243,13 @@ def _execute_aggregate(step: OpStep, tables: Dict[str, List[Dict[str, Any]]]) ->
     return outputs
 
 
-def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_format: str = "csv") -> ExecutionResult:
+def execute_plan(
+    ir_doc: IRDoc,
+    bindings: Dict[str, str],
+    out_dir: Path,
+    output_format: str = "csv",
+    outputs_base: Optional[Path] = None,
+) -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
     outputs: List[Dict[str, Any]] = []
@@ -1299,6 +1314,12 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                         "Datasource step has no output.",
                         _loc_to_dict(step.loc),
                     )
+                ds_name = params.get("name") or out_name
+                if isinstance(ds_name, str) and ds_name.startswith("__datasource__"):
+                    ds_name = ds_name.replace("__datasource__", "", 1)
+                data_dir = out_dir / INPUTS_DATA
+                data_dir.mkdir(parents=True, exist_ok=True)
+                materialized_path = data_dir / f"{ds_name}.csv"
                 if kind == "inline_csv":
                     inline_text = params.get("inline_text") or ""
                     from io import StringIO
@@ -1317,6 +1338,10 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                             row_dict[col] = _parse_value(row[i]) if i < len(row) else None
                         rows_d.append(row_dict)
                     tables[out_name] = rows_d
+                    if rows_d:
+                        _write_csv(materialized_path, rows_d)
+                    else:
+                        materialized_path.write_text("", encoding="utf-8")
                 else:
                     path_str = params.get("path") or ""
                     if not path_str:
@@ -1332,7 +1357,19 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                             f"Datasource file not found: {path_str}",
                             _loc_to_dict(step.loc),
                         )
-                    tables[out_name] = _load_csv(path)
+                    if path.suffix.lower() == ".xpt":
+                        try:
+                            rows_d, _ = load_xpt_with_warnings(path)
+                        except XptError as exc:
+                            raise RuntimeFailure(exc.code, exc.message)
+                        tables[out_name] = rows_d
+                        materialized_path = data_dir / f"{ds_name}.xpt"
+                        import shutil
+                        shutil.copy2(path, materialized_path)
+                    else:
+                        tables[out_name] = _load_csv(path)
+                        import shutil
+                        shutil.copy2(path, materialized_path)
                 t_id = compute_transform_id(op, step.params)
                 step_evidence.append({
                     "step_index": step_idx,
@@ -1451,12 +1488,25 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                 elif op in ("aggregate", "summary"):
                     output_rows = _execute_aggregate(step, tables)
                 elif op == "save":
-                    # Write input table to path (relative to out_dir).
                     path = step.params.get("path") or ""
                     name = step.params.get("name")
-                    out_path = out_dir / path if path else out_dir / f"{input_table}.csv"
+                    base = (outputs_base if outputs_base is not None else out_dir).resolve()
+                    bundle_root = out_dir.resolve()
+                    try:
+                        out_path = validate_save_path_under_outputs(
+                            path or f"{input_table}.csv",
+                            base,
+                            bundle_root,
+                        )
+                    except ValueError as e:
+                        raise RuntimeFailure(
+                            "SANS_RUNTIME_SAVE_PATH_INVALID",
+                            str(e),
+                            _loc_to_dict(step.loc),
+                        ) from e
                     table_rows = tables.get(input_table, [])
                     columns = list(table_rows[0].keys()) if table_rows else []
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
                     _write_csv(out_path, table_rows)
                     outputs.append({
                         "table": name or input_table,
@@ -1542,7 +1592,8 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
             if name not in emit_tables:
                 emit_tables.append(name)
 
-        out_dir.mkdir(parents=True, exist_ok=True)
+        write_base = (outputs_base if outputs_base is not None else out_dir).resolve()
+        write_base.mkdir(parents=True, exist_ok=True)
         for table_name in emit_tables:
             table_rows = tables.get(table_name, [])
             columns: List[str] = []
@@ -1550,13 +1601,13 @@ def execute_plan(ir_doc: IRDoc, bindings: Dict[str, str], out_dir: Path, output_
                 columns = list(table_rows[0].keys())
 
             if output_format.lower() == "xpt":
-                out_path = out_dir / f"{table_name}.xpt"
+                out_path = write_base / f"{table_name}.xpt"
                 try:
                     dump_xpt(out_path, table_rows, columns, dataset_name=table_name.upper())
                 except XptError as exc:
                     raise RuntimeFailure(exc.code, exc.message)
             else:
-                out_path = out_dir / f"{table_name}.csv"
+                out_path = write_base / f"{table_name}.csv"
                 _write_csv(out_path, table_rows)
             
             outputs.append(
@@ -1612,31 +1663,77 @@ def run_script(
 
     # If compilation/validation refused, annotate runtime and exit.
     if report.get("status") == "refused":
-        report["runtime"] = {"status": "refused", "outputs": [], "timing": {"execute_ms": None}}
+        report["runtime"] = {"status": "refused", "timing": {"execute_ms": None}}
         report_path = Path(out_dir) / "report.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report
 
-    # Write expanded.sans (canonical script form from IR) and add to report outputs
-    expanded_path = Path(out_dir) / "expanded.sans"
+    out_path = Path(out_dir).resolve()
+    ensure_bundle_layout(out_path)
+
+    # Write expanded.sans to inputs/source/ and add to report inputs (role=expanded)
+    expanded_path = out_path / INPUTS_SOURCE / "expanded.sans"
     expanded_path.write_text(irdoc_to_expanded_sans(irdoc), encoding="utf-8")
-    report["outputs"].append({"path": expanded_path.name, "sha256": compute_artifact_hash(expanded_path)})
+    expanded_rel = bundle_relative_path(expanded_path, out_path)
+    expanded_sha = compute_artifact_hash(expanded_path)
+    if not expanded_sha:
+        expanded_sha = _sha256_text(expanded_path.read_text(encoding="utf-8"))
+    report["inputs"].append({
+        "role": "expanded",
+        "name": "expanded.sans",
+        "path": expanded_rel,
+        "sha256": expanded_sha,
+    })
 
-    # Populate input hashes
-    existing_inputs = {i["path"] for i in report.get("inputs", [])}
-    if bindings:
-        for name, path_str in bindings.items():
-            p = Path(path_str)
-            posix_path = p.as_posix()
-            if posix_path not in existing_inputs:
-                h = compute_artifact_hash(p)
-                report["inputs"].append({"path": posix_path, "sha256": h, "table": name})
+    # Materialize bindings to inputs/data/<logical_name> (logical name only)
+    bindings_in: Dict[str, str] = {}
+    try:
+        if bindings:
+            data_dir = out_path / INPUTS_DATA
+            data_dir.mkdir(parents=True, exist_ok=True)
+            for name, path_str in bindings.items():
+                p = Path(path_str)
+                if not p.exists():
+                    raise RuntimeFailure(
+                        "SANS_RUNTIME_INPUT_NOT_FOUND",
+                        f"Input table '{name}' file not found: {path_str}",
+                    )
+                dest = data_dir / f"{name}{p.suffix}"
+                import shutil
+                shutil.copy2(p, dest)
+                bindings_in[name] = str(dest)
+                rel = bundle_relative_path(dest, out_path)
+                h = compute_artifact_hash(dest)
+                if not h:
+                    h = compute_raw_hash(dest) or ""
+                report["inputs"].append({"role": "datasource", "name": name, "path": rel, "sha256": h})
 
-    result = execute_plan(irdoc, bindings, Path(out_dir), output_format=output_format)
+        result = execute_plan(
+            irdoc,
+            bindings_in,
+            out_path,
+            output_format=output_format,
+            outputs_base=out_path / OUTPUTS,
+        )
+    except RuntimeFailure as err:
+        report["runtime"] = {"status": "failed", "timing": {"execute_ms": None}}
+        report["timing"]["execute_ms"] = None
+        report["status"] = "failed"
+        report["exit_code_bucket"] = 50
+        report["primary_error"] = {
+            "code": err.code,
+            "message": err.message,
+            "loc": getattr(err, "loc", None),
+        }
+        report["diagnostics"] = [report["primary_error"]]
+        report["outputs"] = []
+        report["report_sha256"] = compute_report_sha256(report, out_path)
+        report_path = out_path / "report.json"
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return report
 
     report["runtime"] = {
         "status": result.status,
-        "outputs": result.outputs,
         "timing": {"execute_ms": result.execute_ms},
     }
     report["timing"]["execute_ms"] = result.execute_ms
@@ -1668,37 +1765,29 @@ def run_script(
         report["exit_code_bucket"] = 0
         report["primary_error"] = None
 
-    # Extend outputs with runtime outputs and hashes if available.
-    runtime_out_entries = []
-    bundle_root = Path(out_dir).resolve()
-
+    # Build report["outputs"] from result.outputs (bundle-relative paths, required sha256)
+    bundle_root = out_path
+    report["outputs"] = []
     for out in result.outputs:
         abs_path = Path(out["path"]).resolve()
-
-        # bundle-relative path for manifests (report/evidence)
         try:
-            rel_path = abs_path.relative_to(bundle_root)
+            rel_posix = bundle_relative_path(abs_path, bundle_root)
         except ValueError:
-            # If something produced a path outside the bundle root, refuse loudly.
-            raise RuntimeError(f"Runtime output path is outside bundle dir: {abs_path} (bundle={bundle_root})")
-
-        rel_posix = rel_path.as_posix()
-
-        entry = {"path": rel_posix, "sha256": compute_artifact_hash(abs_path)}
-        report["outputs"].append(entry)
-
-        runtime_out_entries.append({
+            raise RuntimeError(
+                f"Runtime output path is outside bundle: {abs_path} (bundle={bundle_root})"
+            ) from None
+        h = compute_artifact_hash(abs_path)
+        if not h:
+            h = compute_raw_hash(abs_path) or ""
+        report["outputs"].append({
             "name": out["table"],
             "path": rel_posix,
-            "format": rel_path.suffix.lstrip(".").lower() or "csv",
-            "bytes_sha256": compute_raw_hash(abs_path),
-            "canonical_sha256": entry["sha256"],
-            "row_count": out["rows"],
+            "sha256": h,
+            "rows": out["rows"],
             "columns": out["columns"],
         })
 
-
-    # 1. Emit registry.candidate.json
+    # 1. Emit registry.candidate.json under artifacts/
     registry = {
         "registry_version": "0.1",
         "transforms": [],
@@ -1709,66 +1798,70 @@ def run_script(
         if isinstance(step, OpStep):
             t_id = compute_transform_id(step.op, step.params)
             if t_id not in seen_transforms:
+                from .sans_script.canon import _canonicalize
                 transform_entry = {
                     "transform_id": t_id,
                     "kind": step.op,
                     "spec": {
                         "op": step.op,
-                        "params": step.params # _canonicalize will be done by compute_transform_id internally for hashing, but for registry we should probably store it canonicalized
+                        "params": _canonicalize(step.params or {}),
                     }
                 }
-                # Actually, let's use the same payload as hashed
-                from .sans_script.canon import _canonicalize
-                transform_entry["spec"]["params"] = _canonicalize(step.params or {})
-                
                 registry["transforms"].append(transform_entry)
                 seen_transforms[t_id] = True
             registry["index"][str(step_idx)] = t_id
 
-    registry_path = Path(out_dir) / "registry.candidate.json"
+    registry_path = out_path / ARTIFACTS / "registry.candidate.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-    report["outputs"].append({"path": registry_path.name, "sha256": compute_artifact_hash(registry_path)})
+    registry_rel = bundle_relative_path(registry_path, bundle_root)
+    report["artifacts"].append({
+        "name": "registry.candidate.json",
+        "path": registry_rel,
+        "sha256": compute_artifact_hash(registry_path) or "",
+    })
 
-    # 2. Emit runtime.evidence.json
+    # 2. Emit runtime.evidence.json under artifacts/
+    plan_ir_path = out_path / ARTIFACTS / "plan.ir.json"
     evidence = {
         "sans_version": _engine_version,
         "run_id": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "plan_ir": {
-            "path": "plan.ir.json",
-            "sha256": compute_raw_hash(Path(out_dir) / "plan.ir.json")
+            "path": bundle_relative_path(plan_ir_path, bundle_root),
+            "sha256": compute_raw_hash(plan_ir_path) or "",
         },
-        "bindings": {name: Path(p).name for name, p in bindings.items()},
+        "bindings": {name: Path(p).name for name, p in bindings_in.items()},
         "inputs": [],
-        "outputs": runtime_out_entries,
-        "step_evidence": result.step_evidence or []
+        "outputs": [
+            {
+                "name": o["name"],
+                "path": o["path"],
+                "row_count": o["rows"],
+                "columns": o["columns"],
+            }
+            for o in report["outputs"]
+        ],
+        "step_evidence": result.step_evidence or [],
     }
-    
     for inp in report.get("inputs", []):
-        p = Path(inp["path"])
-        evidence["inputs"].append({
-            "name": inp.get("table"),
-            "path": p.name,
-            "format": p.suffix.lstrip(".").lower() or "csv",
-            "bytes_sha256": compute_raw_hash(p),
-            "canonical_sha256": inp.get("sha256")
-        })
+        if inp.get("role") == "datasource":
+            evidence["inputs"].append({
+                "name": inp.get("name"),
+                "path": inp.get("path"),
+                "sha256": inp.get("sha256"),
+            })
 
-    evidence_path = Path(out_dir) / "runtime.evidence.json"
+    evidence_path = out_path / ARTIFACTS / "runtime.evidence.json"
     evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
-    report["outputs"].append({"path": evidence_path.name, "sha256": compute_artifact_hash(evidence_path)})
+    evidence_rel = bundle_relative_path(evidence_path, bundle_root)
+    report["artifacts"].append({
+        "name": "runtime.evidence.json",
+        "path": evidence_rel,
+        "sha256": compute_artifact_hash(evidence_path) or "",
+    })
 
-    report_path = Path(out_dir) / "report.json"
-    bundle_root = Path(out_dir).resolve()
-
-    # Canonical self-hash: set report_sha256 before writing; report.json output entry stays sha256=None
+    report_path = out_path / "report.json"
     report["report_sha256"] = compute_report_sha256(report, bundle_root)
-    report_path_posix = report_path.as_posix()
-    for o in report["outputs"]:
-        if (o.get("path") == report_path_posix or o.get("path") == report_path.name or
-                (o.get("path") or "").replace("\\", "/").endswith("/report.json")):
-            o["sha256"] = None
-            break
-
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report

@@ -20,11 +20,13 @@ this contract is designed to be:
 
 a bundle is a directory containing:
 
-* `plan.ir.json`
-* `registry.candidate.json`
-* `runtime.evidence.json`
-* optional: `report.json` (sans internal report; ignored by cheshbon v0.1)
-* referenced table files (csv/xpt/etc) at paths referenced by runtime evidence
+* `report.json` at bundle root (only file at root besides directory structure)
+* `inputs/source/` — analysis script, preprocessed.sas (if any), expanded.sans (if any)
+* `inputs/data/` — materialized datasource files (by logical name)
+* `artifacts/` — plan.ir.json, registry.candidate.json, runtime.evidence.json
+* `outputs/` — user-facing table files (csv/xpt) from save step or emit
+
+report and evidence must **never** contain paths outside the bundle; if any file would be outside, the run errors (no exceptions).
 
 cheshbon ingests with:
 

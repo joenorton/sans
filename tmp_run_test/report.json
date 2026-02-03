@@ -1,0 +1,89 @@
+{
+  "report_schema_version": "0.2",
+  "status": "ok",
+  "exit_code_bucket": 0,
+  "primary_error": null,
+  "diagnostics": [],
+  "inputs": [
+    {
+      "role": "source",
+      "name": "t.sas",
+      "path": "inputs/source/t.sas",
+      "sha256": "fda281f4c014b50eaff96c6bd2cbbaa16532914b6d85086209d2511d69dc032d"
+    },
+    {
+      "role": "preprocessed",
+      "name": "preprocessed.sas",
+      "path": "inputs/source/preprocessed.sas",
+      "sha256": "fda281f4c014b50eaff96c6bd2cbbaa16532914b6d85086209d2511d69dc032d"
+    },
+    {
+      "role": "expanded",
+      "name": "expanded.sans",
+      "path": "inputs/source/expanded.sans",
+      "sha256": "7c1c14ed32037f3e1f2cdbd7bf6a831b213ef2216385372a1a1e056d89283f04"
+    },
+    {
+      "role": "datasource",
+      "name": "in",
+      "path": "inputs/data/in.csv",
+      "sha256": "b9485148546419a0f6a85e8d708c923557c15d7f3c7d078ef1fa7f7c0f57d5a5"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "plan.ir.json",
+      "path": "artifacts/plan.ir.json",
+      "sha256": "0efa952b36133c5f436a6414fc9af0c754e50c4edfdbe7266fd9ad096220296b"
+    },
+    {
+      "name": "registry.candidate.json",
+      "path": "artifacts/registry.candidate.json",
+      "sha256": "c18e6d4612049c9afe20c8bde871c9f9d50edd6fbcaed354fbe5b67494f1303c"
+    },
+    {
+      "name": "runtime.evidence.json",
+      "path": "artifacts/runtime.evidence.json",
+      "sha256": "1266e6ac81546c43b73fb58ad939c8568f596d4a4d3f228acb705b7d38a625ea"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "out",
+      "path": "outputs/out.csv",
+      "sha256": "0efdc79536a1a6d9d494300eeefbfa117715e77190d02c08315f8f6d1b84e24d",
+      "rows": 2,
+      "columns": [
+        "a",
+        "b",
+        "c"
+      ]
+    }
+  ],
+  "plan_path": "artifacts/plan.ir.json",
+  "engine": {
+    "name": "sans",
+    "version": "0.1.0"
+  },
+  "settings": {
+    "strict": true,
+    "allow_approx": false,
+    "tolerance": null,
+    "tables": [
+      "in"
+    ],
+    "datasources": []
+  },
+  "timing": {
+    "compile_ms": 2,
+    "validate_ms": 0,
+    "execute_ms": 1
+  },
+  "report_sha256": "b6a9a6e1b7eeb39cfe4a082ba7238acca70939e81f0b41a6ad583e035c0a7248",
+  "runtime": {
+    "status": "ok",
+    "timing": {
+      "execute_ms": 1
+    }
+  }
+}

@@ -20,7 +20,7 @@ def test_gold_xpt_missing_numeric(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    out_xpt = out_dir / "out.xpt"
+    out_xpt = out_dir / "outputs" / "out.xpt"
     data = load_xpt(out_xpt)
     assert data[0]["val"] is None
     assert data[1]["val"] == 3.0
@@ -39,7 +39,7 @@ def test_gold_xpt_char_width_preserve(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    out_xpt = out_dir / "out.xpt"
+    out_xpt = out_dir / "outputs" / "out.xpt"
     data = load_xpt(out_xpt)
     assert data[0]["msg"] == long_str
 
@@ -56,7 +56,7 @@ def test_gold_xpt_mixed_numeric_missing(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    out_xpt = out_dir / "out.xpt"
+    out_xpt = out_dir / "outputs" / "out.xpt"
     data = load_xpt(out_xpt)
     assert data[0]["val"] == 1.25
     assert data[1]["val"] is None
@@ -77,8 +77,8 @@ def test_gold_xpt_deterministic_bytes(tmp_path):
     main(["run", str(script_path), "--out", str(out_a), "--tables", f"source={in_csv}", "--format", "xpt"])
     main(["run", str(script_path), "--out", str(out_b), "--tables", f"source={in_csv}", "--format", "xpt"])
 
-    bytes_a = (out_a / "out.xpt").read_bytes()
-    bytes_b = (out_b / "out.xpt").read_bytes()
+    bytes_a = (out_a / "outputs" / "out.xpt").read_bytes()
+    bytes_b = (out_b / "outputs" / "out.xpt").read_bytes()
     assert bytes_a == bytes_b
 
 
@@ -94,7 +94,7 @@ def test_gold_xpt_char_trailing_spaces_trimmed(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    data = load_xpt(out_dir / "out.xpt")
+    data = load_xpt(out_dir / "outputs" / "out.xpt")
     assert data[0]["msg"] == "A"
 
 
@@ -110,7 +110,7 @@ def test_gold_xpt_column_order_preserved(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    data = load_xpt(out_dir / "out.xpt")
+    data = load_xpt(out_dir / "outputs" / "out.xpt")
     assert list(data[0].keys()) == ["b", "a"]
 
 
@@ -126,7 +126,7 @@ def test_gold_xpt_char_missing_roundtrip(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    data = load_xpt(out_dir / "out.xpt")
+    data = load_xpt(out_dir / "outputs" / "out.xpt")
     assert data[0]["msg"] == ""
 
 
@@ -169,7 +169,7 @@ def test_gold_xpt_label_format_warning(tmp_path):
     ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
     assert ret == 0
 
-    xpt_path = out_dir / "out.xpt"
+    xpt_path = out_dir / "outputs" / "out.xpt"
     data = bytearray(xpt_path.read_bytes())
     # Patch a label-like field in the first NAMESTR chunk (writer layout: 7 blocks before namestrs)
     start = 7 * 80

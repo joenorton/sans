@@ -234,7 +234,7 @@ def test_no_legacy_params_after_validate_sas_and_sans(tmp_path):
     assert report_sans["status"] == "ok", report_sans.get("primary_error", report_sans)
 
     for out_dir in (out_sas, out_sans):
-        plan_path = out_dir / "plan.ir.json"
+        plan_path = out_dir / "artifacts" / "plan.ir.json"
         assert plan_path.exists(), f"Expected {plan_path}"
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         irdoc = _plan_dict_to_irdoc(plan)

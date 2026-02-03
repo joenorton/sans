@@ -39,8 +39,8 @@ def test_hello_verify(tmp_path):
     ret = main(["verify", str(out_dir)])
     assert ret == 0
     
-    # Tamper Output
-    out_csv = out_dir / "out.csv"
+    # Tamper Output (outputs now under outputs/)
+    out_csv = out_dir / "outputs" / "out.csv"
     original_out = out_csv.read_text(encoding="utf-8")
     out_csv.write_text("tampered", encoding="utf-8")
     
@@ -52,27 +52,29 @@ def test_hello_verify(tmp_path):
     ret = main(["verify", str(report_path)])
     assert ret == 0
     
-    # Tamper Input
-    original_in = input_path.read_text(encoding="utf-8")
-    input_path.write_text("tampered", encoding="utf-8")
+    # Tamper Input (materialized copy is under inputs/data/)
+    materialized_input = out_dir / "inputs" / "data" / "input.csv"
+    original_in = materialized_input.read_text(encoding="utf-8")
+    materialized_input.write_text("tampered", encoding="utf-8")
     
     ret = main(["verify", str(report_path)])
     assert ret == 1
     
     # Restore Input
-    input_path.write_text(original_in, encoding="utf-8")
+    materialized_input.write_text(original_in, encoding="utf-8")
     ret = main(["verify", str(report_path)])
     assert ret == 0
     
-    # Tamper Report (Self-Check)
+    # Tamper Report (Self-Check): modify an output hash to mismatch
     original_report = report_path.read_text(encoding="utf-8")
     report_data = json.loads(original_report)
-    # Modify a hash in the report to mismatch
+    # outputs[] is the canonical list; tamper first output's sha256
+    assert len(report_data.get("outputs", [])) > 0
     report_data["outputs"][0]["sha256"] = "deadbeef"
     report_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
     
     ret = main(["verify", str(report_path)])
-    assert ret == 1 # Should fail because out.csv hash mismatch
+    assert ret == 1  # Should fail because out.csv hash mismatch
     
     # Tamper Report Self-Hash
     # To test self-hash check, we need to modify the report content but KEEP the self-hash same
@@ -101,14 +103,8 @@ def test_hello_verify(tmp_path):
     
     # If I change a value in report.json (e.g. status "ok" -> "failed")
     report_data = json.loads(original_report)
-    report_data["status"] = "failed" # Fake change
-    # Keep the old hash for report.json!
-    # find report.json hash
-    old_hash = None
-    for o in report_data["outputs"]:
-        if o["path"] == str(report_path):
-            old_hash = o["sha256"]
-            # We don't change it here, so it remains correct for the OLD content
+    report_data["status"] = "failed"  # Fake change
+    # report.json is not in outputs[]; verify fails on content hash mismatch
     
     report_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
     
@@ -130,24 +126,24 @@ def test_run_writes_expanded_sans_and_stable(tmp_path):
 
     ret1 = main(["run", str(script_path), "--out", str(out_dir_1), "--tables", f"input={input_path}"])
     assert ret1 == 0
-    expanded_path_1 = out_dir_1 / "expanded.sans"
-    assert expanded_path_1.exists(), "run must write expanded.sans"
+    expanded_path_1 = out_dir_1 / "inputs" / "source" / "expanded.sans"
+    assert expanded_path_1.exists(), "run must write expanded.sans to inputs/source/"
     content_1 = expanded_path_1.read_text(encoding="utf-8")
 
     ret2 = main(["run", str(script_path), "--out", str(out_dir_2), "--tables", f"input={input_path}"])
     assert ret2 == 0
-    expanded_path_2 = out_dir_2 / "expanded.sans"
+    expanded_path_2 = out_dir_2 / "inputs" / "source" / "expanded.sans"
     assert expanded_path_2.exists()
     content_2 = expanded_path_2.read_text(encoding="utf-8")
     assert content_1 == content_2, "expanded.sans must be stable across runs (same inputs)"
 
-    # Verify(dir) checks expanded.sans like other outputs (non-null sha256)
+    # Verify(dir); expanded.sans is in inputs[] with role=expanded (not in outputs[])
     ret = main(["verify", str(out_dir_1)])
     assert ret == 0
     report = json.loads((out_dir_1 / "report.json").read_text(encoding="utf-8"))
-    output_paths = [o["path"] for o in report.get("outputs", [])]
-    assert "expanded.sans" in output_paths
-    expanded_entry = next(o for o in report["outputs"] if o["path"] == "expanded.sans")
+    expanded_entries = [i for i in report.get("inputs", []) if i.get("role") == "expanded" and "expanded.sans" in (i.get("path") or "")]
+    assert len(expanded_entries) >= 1, "expanded.sans must appear in inputs with role=expanded"
+    expanded_entry = expanded_entries[0]
     assert expanded_entry.get("sha256") is not None
 
 

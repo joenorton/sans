@@ -106,10 +106,10 @@ def _normalize_path(path_val: str, bundle_root: Path) -> str:
 def canonicalize_report(report: Dict[str, Any], bundle_root: Path) -> Dict[str, Any]:
     """
     Produce a deep copy of report suitable for deterministic hashing.
-    - Removes report_sha256 (and report.json output entry sha256).
-    - Normalizes all paths to posix, relative to bundle_root when under it.
-    - Sorts outputs and inputs by path.
-    - Clears report.json output entry sha256 in the copy so hash does not depend on file content.
+    - Removes report_sha256.
+    - Normalizes all paths to bundle-relative forward slashes.
+    - Canonically sorts inputs, artifacts, outputs by path for determinism.
+    - report.json is not listed in any array; no special-case null-ing.
     """
     out = copy.deepcopy(report)
     bundle = Path(bundle_root).resolve()
@@ -123,17 +123,20 @@ def canonicalize_report(report: Dict[str, Any], bundle_root: Path) -> Dict[str, 
         if inp.get("path"):
             inp["path"] = _normalize_path(str(inp["path"]), bundle)
 
-    report_json_name = "report.json"
+    for art in out.get("artifacts", []):
+        if art.get("path"):
+            art["path"] = _normalize_path(str(art["path"]), bundle)
+
     for o in out.get("outputs", []):
         if o.get("path"):
             o["path"] = _normalize_path(str(o["path"]), bundle)
-            if o["path"] == report_json_name or o["path"].endswith("/report.json"):
-                o["sha256"] = None
 
-    if "outputs" in out:
-        out["outputs"] = sorted(out["outputs"], key=lambda x: (x.get("path") or ""))
     if "inputs" in out:
         out["inputs"] = sorted(out["inputs"], key=lambda x: (x.get("path") or ""))
+    if "artifacts" in out:
+        out["artifacts"] = sorted(out["artifacts"], key=lambda x: (x.get("path") or ""))
+    if "outputs" in out:
+        out["outputs"] = sorted(out["outputs"], key=lambda x: (x.get("path") or ""))
 
     return out
 

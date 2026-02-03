@@ -46,7 +46,7 @@ def test_gold_merge_1_to_many(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "val", "extra"],
         ["1", "A", "X"],
@@ -110,7 +110,7 @@ def test_gold_dataset_options_precedence(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "score"],
         ["1", "10"],
@@ -140,7 +140,7 @@ def test_gold_missing_comparisons(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "val"],
         ["3", "5"],
@@ -170,7 +170,7 @@ def test_gold_missing_arithmetic(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "x"],
         ["1", ""],
@@ -199,7 +199,7 @@ def test_gold_sort_nodupkey_first_wins(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "val"],
         ["1", "X"],
@@ -240,7 +240,7 @@ def test_gold_transpose_duplicate_id_last_wins(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "lb_wide.csv")
+    rows = _read_csv(out_dir / "outputs" / "lb_wide.csv")
     assert rows == [
         ["subjid", "GLUC"],
         ["101", "2"],
@@ -273,7 +273,7 @@ def test_gold_sql_left_join_null_fill(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "val", "extra"],
         ["1", "A", "X"],
@@ -305,7 +305,7 @@ def test_gold_sql_groupby_deterministic_order(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "nrec"],
         ["1", "1"],
@@ -382,7 +382,7 @@ def test_gold_input_best_informat(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "x"],
         ["1", "3.5"],
@@ -413,7 +413,7 @@ def test_gold_summary_mean_autoname(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "val_mean"],
         ["1", "3.0"],
@@ -460,7 +460,7 @@ def test_gold_format_put_mapping(tmp_path):
     )
 
     assert report["status"] == "ok"
-    rows = _read_csv(out_dir / "out.csv")
+    rows = _read_csv(out_dir / "outputs" / "out.csv")
     assert rows == [
         ["id", "sevn"],
         ["1", "1"],
@@ -527,6 +527,6 @@ def test_gold_determinism_repeat_run(tmp_path):
     assert report_a["status"] == "ok"
     assert report_b["status"] == "ok"
 
-    hash_a = compute_artifact_hash(out_a / "out.csv")
-    hash_b = compute_artifact_hash(out_b / "out.csv")
+    hash_a = compute_artifact_hash(out_a / "outputs" / "out.csv")
+    hash_b = compute_artifact_hash(out_b / "outputs" / "out.csv")
     assert hash_a == hash_b

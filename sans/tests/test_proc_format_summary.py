@@ -48,7 +48,7 @@ def test_proc_format_put_mapping(tmp_path: Path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "sev", "sev_m"]
@@ -113,7 +113,7 @@ def test_input_best_informat_parses_numeric(tmp_path: Path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "val", "num"]
@@ -179,7 +179,7 @@ def test_proc_summary_mean(tmp_path: Path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "val_mean"]
@@ -218,7 +218,7 @@ def test_proc_sort_nodupkey_first_wins(tmp_path: Path):
     )
 
     assert report["status"] == "ok"
-    out_csv = tmp_path / "out.csv"
+    out_csv = tmp_path / "outputs" / "out.csv"
     with out_csv.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == ["id", "val"]

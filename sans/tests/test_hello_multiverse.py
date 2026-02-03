@@ -88,8 +88,8 @@ def test_hello_multiverse_end_to_end(tmp_path: Path):
     run_result = _run_cmd(run_args, _project_root())
     assert run_result.returncode == 0, run_result.stdout + run_result.stderr
 
-    ae_s_csv = out_dir / "ae_s.csv"
-    ae_sum_csv = out_dir / "ae_sum.csv"
+    ae_s_csv = out_dir / "outputs" / "ae_s.csv"
+    ae_sum_csv = out_dir / "outputs" / "ae_sum.csv"
     assert ae_s_csv.exists()
     assert ae_sum_csv.exists()
 

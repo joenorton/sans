@@ -1,0 +1,1 @@
+data out; set in; c = a + b; run;
