@@ -23,7 +23,7 @@ a bundle is a directory containing:
 * `report.json` at bundle root (only file at root besides directory structure)
 * `inputs/source/` — analysis script, preprocessed.sas (if any), expanded.sans (if any)
 * `inputs/data/` — materialized datasource files (by logical name)
-* `artifacts/` — plan.ir.json, registry.candidate.json, runtime.evidence.json
+* `artifacts/` — plan.ir.json, graph.json, vars.graph.json, table.effects.json, registry.candidate.json, runtime.evidence.json
 * `outputs/` — user-facing table files (csv/xpt) from save step or emit
 
 report and evidence must **never** contain paths outside the bundle; if any file would be outside, the run errors (no exceptions).

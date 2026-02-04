@@ -24,6 +24,12 @@ from . import __version__ as _engine_version
 from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
 from .bundle import ensure_bundle_layout, bundle_relative_path, INPUTS_SOURCE, ARTIFACTS
 from .graph import build_graph, write_graph_json
+from .lineage import (
+    build_var_graph,
+    build_table_effects,
+    write_vars_graph_json,
+    write_table_effects_json,
+)
 from .sans_script import SansScriptError, lower_script, parse_sans_script
 from .sans_script.canon import compute_step_id, compute_transform_id, compute_transform_class_id
 
@@ -450,6 +456,17 @@ def emit_check_artifacts(
     graph = build_graph(irdoc, producer={"name": "sans", "version": _engine_version})
     write_graph_json(graph, graph_path)
 
+    initial_schema: Dict[str, List[str]] = {}
+    for name, ds in irdoc.datasources.items():
+        if ds.columns:
+            initial_schema[f"__datasource__{name}"] = list(ds.columns)
+    vars_graph_path = out_path / ARTIFACTS / "vars.graph.json"
+    vars_graph = build_var_graph(irdoc, initial_schema=initial_schema)
+    write_vars_graph_json(vars_graph, vars_graph_path)
+    effects_path = out_path / ARTIFACTS / "table.effects.json"
+    effects = build_table_effects(irdoc)
+    write_table_effects_json(effects, effects_path)
+
     source_basename = Path(file_name).name or "script"
     source_dest = out_path / INPUTS_SOURCE / source_basename
     source_path = Path(file_name)
@@ -476,6 +493,8 @@ def emit_check_artifacts(
 
     plan_rel = bundle_relative_path(plan_path, out_path)
     graph_rel = bundle_relative_path(graph_path, out_path)
+    vars_graph_rel = bundle_relative_path(vars_graph_path, out_path)
+    effects_rel = bundle_relative_path(effects_path, out_path)
     source_rel = bundle_relative_path(source_dest, out_path)
     inputs_list: List[Dict[str, Any]] = [
         {"role": "source", "name": source_basename, "path": source_rel, "sha256": compute_input_hash(source_dest) or ""}
@@ -497,6 +516,8 @@ def emit_check_artifacts(
         "artifacts": [
             {"name": plan_name, "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""},
             {"name": "graph.json", "path": graph_rel, "sha256": compute_artifact_hash(graph_path) or ""},
+            {"name": "vars.graph.json", "path": vars_graph_rel, "sha256": compute_artifact_hash(vars_graph_path) or ""},
+            {"name": "table.effects.json", "path": effects_rel, "sha256": compute_artifact_hash(effects_path) or ""},
         ],
         "outputs": [],
         "plan_path": plan_rel,

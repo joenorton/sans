@@ -22,6 +22,7 @@ def _write_failed_report(out_dir: Path, message: str) -> int:
     from .bundle import ensure_bundle_layout, bundle_relative_path, ARTIFACTS
     from .hash_utils import compute_artifact_hash, compute_report_sha256
     from .graph import write_graph_json
+    from .lineage import write_vars_graph_json, write_table_effects_json
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     ensure_bundle_layout(out_dir)
@@ -33,9 +34,15 @@ def _write_failed_report(out_dir: Path, message: str) -> int:
         {"schema_version": 1, "producer": {"name": "sans", "version": _engine_version}, "nodes": [], "edges": []},
         graph_path,
     )
+    vars_graph_path = out_dir / ARTIFACTS / "vars.graph.json"
+    write_vars_graph_json({"nodes": [], "edges": []}, vars_graph_path)
+    effects_path = out_dir / ARTIFACTS / "table.effects.json"
+    write_table_effects_json({"effects": []}, effects_path)
     report_path = out_dir / "report.json"
     plan_rel = bundle_relative_path(plan_path, out_dir)
     graph_rel = bundle_relative_path(graph_path, out_dir)
+    vars_graph_rel = bundle_relative_path(vars_graph_path, out_dir)
+    effects_rel = bundle_relative_path(effects_path, out_dir)
     report = {
         "report_schema_version": "0.3",
         "status": "failed",
@@ -46,6 +53,8 @@ def _write_failed_report(out_dir: Path, message: str) -> int:
         "artifacts": [
             {"name": "plan.ir.json", "path": plan_rel, "sha256": compute_artifact_hash(plan_path) or ""},
             {"name": "graph.json", "path": graph_rel, "sha256": compute_artifact_hash(graph_path) or ""},
+            {"name": "vars.graph.json", "path": vars_graph_rel, "sha256": compute_artifact_hash(vars_graph_path) or ""},
+            {"name": "table.effects.json", "path": effects_rel, "sha256": compute_artifact_hash(effects_path) or ""},
         ],
         "outputs": [],
         "plan_path": plan_rel,
