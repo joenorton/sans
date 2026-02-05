@@ -132,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "verify":
         from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
+        from .path_utils import fs_path_from_report
         bundle_path = Path(args.bundle)
         if bundle_path.is_dir():
             report_path = bundle_path / "report.json"
@@ -161,10 +162,11 @@ def main(argv: list[str] | None = None) -> int:
         # Check inputs (bundle-relative paths only)
         for inp in report.get("inputs", []):
             path_str = inp.get("path") or ""
-            if Path(path_str).is_absolute():
+            rel_path = fs_path_from_report(path_str)
+            if rel_path.is_absolute():
                 print(f"failed: input path must be bundle-relative: {path_str}")
                 return 1
-            path = bundle_root / path_str
+            path = bundle_root / rel_path
             expected = inp.get("sha256")
             if not path.exists():
                 print(f"failed: input file missing: {path}")
@@ -178,10 +180,11 @@ def main(argv: list[str] | None = None) -> int:
         # Check artifacts
         for art in report.get("artifacts", []):
             path_str = art.get("path") or ""
-            if Path(path_str).is_absolute():
+            rel_path = fs_path_from_report(path_str)
+            if rel_path.is_absolute():
                 print(f"failed: artifact path must be bundle-relative: {path_str}")
                 return 1
-            path = bundle_root / path_str
+            path = bundle_root / rel_path
             expected = art.get("sha256")
             if not path.exists():
                 print(f"failed: artifact file missing: {path}")
@@ -195,10 +198,11 @@ def main(argv: list[str] | None = None) -> int:
         # Check outputs (report.json is not listed in any array)
         for out in report.get("outputs", []):
             path_str = out.get("path") or ""
-            if Path(path_str).is_absolute():
+            rel_path = fs_path_from_report(path_str)
+            if rel_path.is_absolute():
                 print(f"failed: output path must be bundle-relative: {path_str}")
                 return 1
-            path = bundle_root / path_str
+            path = bundle_root / rel_path
             expected = out.get("sha256")
             if not expected:
                 print(f"failed: output entry missing sha256: {path_str}")
