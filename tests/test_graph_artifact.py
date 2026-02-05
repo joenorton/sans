@@ -26,8 +26,8 @@ def test_graph_determinism_same_script(tmp_path: Path) -> None:
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    r1 = run_script(script, "s.sas", {"in": str(in_csv)}, out1)
-    r2 = run_script(script, "s.sas", {"in": str(in_csv)}, out2)
+    r1 = run_script(script, "s.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    r2 = run_script(script, "s.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
 
     assert _graph_bytes(out1) == _graph_bytes(out2)
     assert _graph_sha(r1) == _graph_sha(r2)
@@ -49,8 +49,8 @@ def test_graph_ignores_whitespace_and_comments(tmp_path: Path) -> None:
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    run_script(script_a, "s.sas", {"in": str(in_csv)}, out1)
-    run_script(script_b, "s.sas", {"in": str(in_csv)}, out2)
+    run_script(script_a, "s.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    run_script(script_b, "s.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
 
     assert _graph_bytes(out1) == _graph_bytes(out2)
 
@@ -68,8 +68,8 @@ def test_graph_changes_on_topology_change(tmp_path: Path) -> None:
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    run_script(script_a, "s.sas", {"in": str(in_csv)}, out1)
-    run_script(script_b, "s.sas", {"in": str(in_csv)}, out2)
+    run_script(script_a, "s.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    run_script(script_b, "s.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
 
     assert _graph_bytes(out1) != _graph_bytes(out2)
 
@@ -84,7 +84,7 @@ def test_graph_edges_reference_valid_nodes(tmp_path: Path) -> None:
         ]
     )
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
 
     graph = _graph_json(out_dir)
     nodes = graph.get("nodes", [])

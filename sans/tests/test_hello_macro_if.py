@@ -1,5 +1,5 @@
 """
-Macro %if tests. Per SAS ingestion contract (docs/SAS_INGESTION_CONTRACT.md),
+Macro %if tests. Per SAS ingestion contract (docs/SAS_INGESTION_CONTRACT.md)
 %if/%then/%else that changes graph shape is rejected with SANS_REFUSAL_MACRO_GRAPH.
 """
 import json
@@ -24,7 +24,7 @@ def test_sas_refuses_macro_if_then_else(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"in={in_csv}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"in={in_csv}", "--legacy-sas"])
     assert ret != 0
 
     report_path = out_dir / "report.json"
@@ -48,7 +48,7 @@ def test_sas_refuses_macro_if_do_block(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_do"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"in={in_csv}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"in={in_csv}", "--legacy-sas"])
     assert ret != 0
 
     report_path = out_dir / "report.json"

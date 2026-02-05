@@ -91,13 +91,15 @@ def test_proc_sql_no_refusal():
     assert refusal is None
 
 def test_segment_data_and_proc_blocks():
-    script = ("data mydata;\n"
-              "    set otherdata;\n"
-              "run;\n"
-              "proc mysort data=mydata out=sorted;\n"
-              "    by somevar;\n"
-              "run;\n"
-              "title \"hello\";")
+    script = (
+        "data mydata;\n"
+        "    set otherdata;\n"
+        "run;\n"
+        "proc mysort data=mydata out=sorted;\n"
+        "    by somevar;\n"
+        "run;\n"
+        "title \"hello\";"
+    )
     statements = list(split_statements(script, "test.sas"))
     assert all(";" not in s.text for s in statements)
     blocks = segment_blocks(statements)

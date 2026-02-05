@@ -16,8 +16,8 @@ def test_exit_code_bucket_consistency(tmp_path):
         text=script,
         file_name="fail.sas",
         bindings={"in": str(in_csv)},
-        out_dir=tmp_path
-    )
+        out_dir=tmp_path,
+    legacy_sas=True)
     
     assert report["status"] == "failed"
     assert report["exit_code_bucket"] == 50
@@ -33,8 +33,8 @@ def test_windows_newline_parity(tmp_path):
         text=script,
         file_name="test.sas",
         bindings={"in": str(in_csv)},
-        out_dir=tmp_path
-    )
+        out_dir=tmp_path,
+    legacy_sas=True)
     
     out_csv = tmp_path / "outputs" / "out.csv"
     out_content = out_csv.read_text(encoding="utf-8")
@@ -52,7 +52,7 @@ def test_sort_missing_values(tmp_path):
         writer.writerow(["1"])
     
     script = "proc sort data=in out=out; by a; run;"
-    run_script(text=script, file_name="sort.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)   
+    run_script(text=script, file_name="sort.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path, legacy_sas=True)   
 
     out_csv = tmp_path / "outputs" / "out.csv"
     rows = out_csv.read_text(encoding="utf-8").splitlines()
@@ -70,7 +70,7 @@ def test_where_missing_comparisons(tmp_path):
     
     # if a < 5 should be true for None
     script = "data out; set in; if a < 5; run;"
-    run_script(text=script, file_name="where.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)  
+    run_script(text=script, file_name="where.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path, legacy_sas=True)  
 
     out_csv = tmp_path / "outputs" / "out.csv"
     rows = out_csv.read_text(encoding="utf-8").splitlines()
@@ -78,7 +78,7 @@ def test_where_missing_comparisons(tmp_path):
 def test_duplicate_table_binding_fails(tmp_path):
     from sans.__main__ import main
     # Use main to test CLI level
-    ret = main(["run", "script.sas", "--out", str(tmp_path), "--tables", "a=1.csv,a=2.csv"])
+    ret = main(["run", "script.sas", "--out", str(tmp_path), "--tables", "a=1.csv,a=2.csv", "--legacy-sas"])
     assert ret == 50
     
     report_path = tmp_path / "report.json"
@@ -90,7 +90,7 @@ def test_empty_csv_behavior(tmp_path):
     in_csv.write_text("", encoding="utf-8") # Completely empty
     
     script = "data out; set in; run;"
-    report = run_script(text=script, file_name="empty.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)
+    report = run_script(text=script, file_name="empty.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path, legacy_sas=True)
     
     assert report["status"] == "ok"
     out_csv = tmp_path / "outputs" / "out.csv"
@@ -101,7 +101,7 @@ def test_decimal_precision(tmp_path):
     in_csv.write_text("a\n1.00000000000000000001", encoding="utf-8")
     
     script = "data out; set in; b = a + 1; run;"
-    run_script(text=script, file_name="prec.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path)
+    run_script(text=script, file_name="prec.sas", bindings={"in": str(in_csv)}, out_dir=tmp_path, legacy_sas=True)
     
     out_csv = tmp_path / "outputs" / "out.csv"
     content = out_csv.read_text(encoding="utf-8")

@@ -1734,6 +1734,7 @@ def run_script(
     include_roots: Optional[List[Path]] = None,
     allow_absolute_includes: bool = False,
     allow_include_escape: bool = False,
+    legacy_sas: bool = False,
 ) -> Dict[str, Any]:
     irdoc, report = emit_check_artifacts(
         text=text,
@@ -1745,6 +1746,7 @@ def run_script(
         allow_absolute_includes=allow_absolute_includes,
         allow_include_escape=allow_include_escape,
         emit_vars_graph=False,
+        legacy_sas=legacy_sas,
     )
 
     # If compilation/validation refused, annotate runtime and exit.

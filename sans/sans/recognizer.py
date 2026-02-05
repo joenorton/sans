@@ -6,6 +6,7 @@ from .frontend import Block, Statement
 from .ir import OpStep, UnknownBlockStep, Step
 from ._loc import Loc
 from .parser_expr import parse_expression_from_string
+from .legacy import LegacyExprError, parse_legacy_predicate
 from .expr import lit
 
 
@@ -34,6 +35,12 @@ def _expr_uses_by_flag(expr: Any) -> bool:
     if node_type == "call":
         return any(_expr_uses_by_flag(arg) for arg in expr.get("args", []))
     return False
+
+
+def _parse_expr(expr_text: str, file_name: str, legacy_sas: bool) -> dict:
+    if legacy_sas:
+        return parse_legacy_predicate(expr_text, file_name)
+    return parse_expression_from_string(expr_text, file_name)
 
 
 def _split_tokens_outside_parens(text: str) -> list[str]:
@@ -186,7 +193,12 @@ def _parse_sql_select_item(item_text: str, loc: Loc) -> dict[str, Any] | Unknown
     return {"type": "col", "name": col_name, "alias": alias}
 
 
-def _parse_dataset_spec(spec_text: str, loc: Loc, allow_in_flag: bool) -> dict[str, Any] | UnknownBlockStep:
+def _parse_dataset_spec(
+    spec_text: str,
+    loc: Loc,
+    allow_in_flag: bool,
+    legacy_sas: bool,
+) -> dict[str, Any] | UnknownBlockStep:
     s = spec_text.strip()
     if not s:
         return UnknownBlockStep(
@@ -356,7 +368,13 @@ def _parse_dataset_spec(spec_text: str, loc: Loc, allow_in_flag: bool) -> dict[s
                 )
             inner = value[1:-1].strip()
             try:
-                spec["where"] = parse_expression_from_string(inner, loc.file)
+                spec["where"] = _parse_expr(inner, loc.file, legacy_sas)
+            except LegacyExprError as e:
+                return UnknownBlockStep(
+                    code=e.code,
+                    message=e.message,
+                    loc=loc,
+                )
             except ValueError as e:
                 return UnknownBlockStep(
                     code="SANS_PARSE_EXPRESSION_ERROR",
@@ -395,9 +413,9 @@ def _is_stateful_data_step(block: Block) -> bool:
     return False
 
 
-def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
+def recognize_data_block(block: Block, legacy_sas: bool = False) -> list[OpStep | UnknownBlockStep]:
     if _is_stateful_data_step(block):
-        return _recognize_stateful_data_block(block)
+        return _recognize_stateful_data_block(block, legacy_sas=legacy_sas)
     steps: list[OpStep | UnknownBlockStep] = []
 
     if not block.header.text.lower().startswith("data "):
@@ -432,7 +450,12 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
             loc=set_stmt.loc,
         )]
     set_spec_text = set_match.group(1).strip()
-    set_spec = _parse_dataset_spec(set_spec_text, set_stmt.loc, allow_in_flag=False)
+    set_spec = _parse_dataset_spec(
+        set_spec_text,
+        set_stmt.loc,
+        allow_in_flag=False,
+        legacy_sas=legacy_sas,
+    )
     if isinstance(set_spec, UnknownBlockStep):
         return [set_spec]
     current_input_table = set_spec["table"]
@@ -590,7 +613,13 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
             col_name = assign_match.group(1)
             expr_str = assign_match.group(2)
             try:
-                expr_ast = parse_expression_from_string(expr_str, block.header.loc.file)
+                expr_ast = _parse_expr(expr_str, block.header.loc.file, legacy_sas)
+            except LegacyExprError as e:
+                return [UnknownBlockStep(
+                    code=e.code,
+                    message=e.message,
+                    loc=stmt.loc,
+                )]
             except ValueError as e:
                 return [UnknownBlockStep(
                     code="SANS_PARSE_EXPRESSION_ERROR",
@@ -620,10 +649,17 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
     if filter_statements:
         filter_stmt = filter_statements[0]
         try:
-            predicate_ast = parse_expression_from_string(
+            predicate_ast = _parse_expr(
                 filter_stmt.text[len("if "):].strip(),
                 block.header.loc.file,
+                legacy_sas,
             )
+        except LegacyExprError as e:
+            return [UnknownBlockStep(
+                code=e.code,
+                message=e.message,
+                loc=filter_stmt.loc,
+            )]
         except ValueError as e:
             return [UnknownBlockStep(
                 code="SANS_PARSE_EXPRESSION_ERROR",
@@ -678,9 +714,10 @@ def recognize_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
 
 
 class DataStepParser:
-    def __init__(self, statements: List[Statement], file_name: str):
+    def __init__(self, statements: List[Statement], file_name: str, legacy_sas: bool):
         self.statements = list(statements)
         self.file_name = file_name
+        self.legacy_sas = legacy_sas
         self.i = 0
         self.assignment_regex = re.compile(r"^([a-zA-Z_]\w*)\s*=\s*(.+)$")
         self.loop_int_regex = re.compile(r"^[+-]?\d+$")
@@ -758,8 +795,12 @@ class DataStepParser:
             if " then " in s_low:
                 m = re.match(r"if\s+(.+?)\s+then\s+(.+)$", s, re.I)
                 if not m: return UnknownBlockStep(code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM", message="Malformed IF", loc=stmt.loc)
-                try: pred_ast = parse_expression_from_string(m.group(1), self.file_name)
-                except Exception as e: return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=stmt.loc)
+                try:
+                    pred_ast = _parse_expr(m.group(1), self.file_name, self.legacy_sas)
+                except LegacyExprError as e:
+                    return UnknownBlockStep(code=e.code, message=e.message, loc=stmt.loc)
+                except Exception as e:
+                    return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=stmt.loc)
                 then_action = self.parse_action_or_do(m.group(2).strip(), stmt.loc)
                 if isinstance(then_action, UnknownBlockStep): return then_action
                 node = {"type": "if_then", "predicate": pred_ast, "then": then_action, "else": None}
@@ -767,7 +808,11 @@ class DataStepParser:
                     else_stmt = self.consume(); else_s = else_stmt.text.strip()
                     if else_s.lower().startswith("else if "):
                         if_part = else_s[len("else "):].strip()
-                        inner_parser = DataStepParser([Statement(if_part, else_stmt.loc)] + self.statements[self.i:], self.file_name)
+                        inner_parser = DataStepParser(
+                            [Statement(if_part, else_stmt.loc)] + self.statements[self.i:],
+                            self.file_name,
+                            self.legacy_sas,
+                        )
                         inner_node = inner_parser.parse_next()
                         if isinstance(inner_node, UnknownBlockStep): return inner_node
                         node["else"] = inner_node; self.i += (inner_parser.i - 1); break
@@ -777,8 +822,12 @@ class DataStepParser:
                         node["else"] = else_action; break
                 return node
             else:
-                try: pred_ast = parse_expression_from_string(s[3:].strip(), self.file_name)
-                except Exception as e: return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=stmt.loc)
+                try:
+                    pred_ast = _parse_expr(s[3:].strip(), self.file_name, self.legacy_sas)
+                except LegacyExprError as e:
+                    return UnknownBlockStep(code=e.code, message=e.message, loc=stmt.loc)
+                except Exception as e:
+                    return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=stmt.loc)
                 return {"type": "filter", "predicate": pred_ast}
 
         if s_low.startswith("select"):
@@ -789,8 +838,12 @@ class DataStepParser:
                 if n_l.startswith("when"):
                     m = re.match(r"when\s*\((.+?)\)\s*(.+)$", n_s, re.I)
                     if not m: return UnknownBlockStep(code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM", message="Malformed WHEN", loc=nxt.loc)
-                    try: c_ast = parse_expression_from_string(m.group(1), self.file_name)
-                    except Exception as e: return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=nxt.loc)
+                    try:
+                        c_ast = _parse_expr(m.group(1), self.file_name, self.legacy_sas)
+                    except LegacyExprError as e:
+                        return UnknownBlockStep(code=e.code, message=e.message, loc=nxt.loc)
+                    except Exception as e:
+                        return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=nxt.loc)
                     act = self.parse_action_or_do(m.group(2).strip(), nxt.loc)
                     if isinstance(act, UnknownBlockStep): return act
                     sel["when"].append({"cond": c_ast, "action": act})
@@ -808,8 +861,12 @@ class DataStepParser:
 
         m = self.assignment_regex.match(s)
         if m:
-            try: e_ast = parse_expression_from_string(m.group(2), self.file_name)
-            except Exception as e: return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=stmt.loc)
+            try:
+                e_ast = _parse_expr(m.group(2), self.file_name, self.legacy_sas)
+            except LegacyExprError as e:
+                return UnknownBlockStep(code=e.code, message=e.message, loc=stmt.loc)
+            except Exception as e:
+                return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=stmt.loc)
             return {"type": "assign", "target": m.group(1).lower(), "expr": e_ast}
         
         # Forbidden tokens check
@@ -827,7 +884,11 @@ class DataStepParser:
         a_l = action_str.lower()
         if a_l.startswith("do"):
             if " to " in a_l:
-                sub = DataStepParser([Statement(action_str, loc)] + self.statements[self.i:], self.file_name)
+                sub = DataStepParser(
+                    [Statement(action_str, loc)] + self.statements[self.i:],
+                    self.file_name,
+                    self.legacy_sas,
+                )
                 res = sub.parse_next()
                 if isinstance(res, UnknownBlockStep): return res
                 self.i += (sub.i - 1); return res
@@ -841,13 +902,17 @@ class DataStepParser:
         if text.lower() == "output": return {"type": "output"}
         m = self.assignment_regex.match(text)
         if m:
-            try: e_ast = parse_expression_from_string(m.group(2), self.file_name)
-            except Exception as e: return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=loc)
+            try:
+                e_ast = _parse_expr(m.group(2), self.file_name, self.legacy_sas)
+            except LegacyExprError as e:
+                return UnknownBlockStep(code=e.code, message=e.message, loc=loc)
+            except Exception as e:
+                return UnknownBlockStep(code="SANS_PARSE_EXPRESSION_ERROR", message=str(e), loc=loc)
             return {"type": "assign", "target": m.group(1).lower(), "expr": e_ast}
         return UnknownBlockStep(code="SANS_PARSE_UNSUPPORTED_DATASTEP_FORM", message=f"Invalid action: {text}", loc=loc)
 
 
-def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockStep]:
+def _recognize_stateful_data_block(block: Block, legacy_sas: bool) -> list[OpStep | UnknownBlockStep]:
     if not block.header.text.lower().startswith("data "):
         return [UnknownBlockStep(
             code="SANS_PARSE_INVALID_DATA_BLOCK_HEADER",
@@ -910,7 +975,12 @@ def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockSt
                 loc=set_stmt.loc,
             )]
         set_spec_text = set_match.group(1).strip()
-        set_spec = _parse_dataset_spec(set_spec_text, set_stmt.loc, allow_in_flag=False)
+        set_spec = _parse_dataset_spec(
+            set_spec_text,
+            set_stmt.loc,
+            allow_in_flag=False,
+            legacy_sas=legacy_sas,
+        )
         if isinstance(set_spec, UnknownBlockStep):
             return [set_spec]
         input_specs.append(set_spec)
@@ -930,7 +1000,12 @@ def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockSt
         for part in parts:
             if not part:
                 continue
-            spec = _parse_dataset_spec(part, merge_stmt.loc, allow_in_flag=True)
+            spec = _parse_dataset_spec(
+                part,
+                merge_stmt.loc,
+                allow_in_flag=True,
+                legacy_sas=legacy_sas,
+            )
             if isinstance(spec, UnknownBlockStep):
                 return [spec]
             if spec.get("in"):
@@ -1012,7 +1087,7 @@ def _recognize_stateful_data_block(block: Block) -> list[OpStep | UnknownBlockSt
                 loc=block.loc_span,
             )]
 
-    parser = DataStepParser(block.body, block.header.loc.file)
+    parser = DataStepParser(block.body, block.header.loc.file, legacy_sas)
     statements = parser.parse_body()
     if isinstance(statements, UnknownBlockStep):
         return [statements]
@@ -1285,7 +1360,7 @@ def recognize_proc_transpose_block(block: Block) -> OpStep | UnknownBlockStep:
     )
 
 
-def recognize_proc_sql_block(block: Block) -> OpStep | UnknownBlockStep:
+def recognize_proc_sql_block(block: Block, legacy_sas: bool = False) -> OpStep | UnknownBlockStep:
     if not block.header.text.lower().startswith("proc sql"):
         return UnknownBlockStep(
             code="SANS_PARSE_INVALID_PROC_SQL_HEADER",
@@ -1441,7 +1516,13 @@ def recognize_proc_sql_block(block: Block) -> OpStep | UnknownBlockStep:
         if isinstance(join_spec, UnknownBlockStep):
             return join_spec
         try:
-            on_expr = parse_expression_from_string(on_expr_text, stmt.loc.file)
+            on_expr = _parse_expr(on_expr_text, stmt.loc.file, legacy_sas)
+        except LegacyExprError as e:
+            return UnknownBlockStep(
+                code=e.code,
+                message=e.message,
+                loc=stmt.loc,
+            )
         except ValueError as e:
             return UnknownBlockStep(
                 code="SANS_PARSE_EXPRESSION_ERROR",
@@ -1460,7 +1541,13 @@ def recognize_proc_sql_block(block: Block) -> OpStep | UnknownBlockStep:
     where_expr = None
     if where_clause:
         try:
-            where_expr = parse_expression_from_string(where_clause, stmt.loc.file)
+            where_expr = _parse_expr(where_clause, stmt.loc.file, legacy_sas)
+        except LegacyExprError as e:
+            return UnknownBlockStep(
+                code=e.code,
+                message=e.message,
+                loc=stmt.loc,
+            )
         except ValueError as e:
             return UnknownBlockStep(
                 code="SANS_PARSE_EXPRESSION_ERROR",

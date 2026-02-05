@@ -17,7 +17,7 @@ def test_gold_xpt_missing_numeric(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_missing"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     out_xpt = out_dir / "outputs" / "out.xpt"
@@ -36,7 +36,7 @@ def test_gold_xpt_char_width_preserve(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_long"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     out_xpt = out_dir / "outputs" / "out.xpt"
@@ -53,7 +53,7 @@ def test_gold_xpt_mixed_numeric_missing(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_mixed"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     out_xpt = out_dir / "outputs" / "out.xpt"
@@ -74,8 +74,8 @@ def test_gold_xpt_deterministic_bytes(tmp_path):
     out_a = tmp_path / "out_a"
     out_b = tmp_path / "out_b"
 
-    main(["run", str(script_path), "--out", str(out_a), "--tables", f"source={in_csv}", "--format", "xpt"])
-    main(["run", str(script_path), "--out", str(out_b), "--tables", f"source={in_csv}", "--format", "xpt"])
+    main(["run", str(script_path), "--out", str(out_a), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
+    main(["run", str(script_path), "--out", str(out_b), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
 
     bytes_a = (out_a / "outputs" / "out.xpt").read_bytes()
     bytes_b = (out_b / "outputs" / "out.xpt").read_bytes()
@@ -91,7 +91,7 @@ def test_gold_xpt_char_trailing_spaces_trimmed(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_trim"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     data = load_xpt(out_dir / "outputs" / "out.xpt")
@@ -107,7 +107,7 @@ def test_gold_xpt_column_order_preserved(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_order"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     data = load_xpt(out_dir / "outputs" / "out.xpt")
@@ -123,7 +123,7 @@ def test_gold_xpt_char_missing_roundtrip(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_char_missing"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     data = load_xpt(out_dir / "outputs" / "out.xpt")
@@ -140,7 +140,7 @@ def test_gold_xpt_length_cap_error(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_len_cap"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret != 0
 
 
@@ -153,7 +153,7 @@ def test_gold_xpt_corrupt_header_error(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_bad"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"bad={bad}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"bad={bad}", "--legacy-sas"])
     assert ret != 0
 
 
@@ -166,7 +166,7 @@ def test_gold_xpt_label_format_warning(tmp_path):
     script_path.write_text(script, encoding="utf-8")
 
     out_dir = tmp_path / "out_warn"
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     assert ret == 0
 
     xpt_path = out_dir / "outputs" / "out.xpt"
@@ -177,5 +177,5 @@ def test_gold_xpt_label_format_warning(tmp_path):
         data[start + 16:start + 21] = b"LABEL"
         xpt_path.write_bytes(bytes(data))
 
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={xpt_path}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"source={xpt_path}", "--legacy-sas"])
     assert ret == 10

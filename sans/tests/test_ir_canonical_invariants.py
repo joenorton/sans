@@ -1,6 +1,6 @@
 """
 Property-style invariant: no legacy param shapes survive IRDoc.validate().
-Load plan.ir.json from compile+emit runs (SAS + SANS fixtures), rebuild IRDoc,
+Load plan.ir.json from compile+emit runs (SAS + SANS fixtures), rebuild IRDoc
 call validate(), then assert no FORBIDDEN_KEYS and per-op canonical shapes.
 """
 from __future__ import annotations
@@ -110,7 +110,7 @@ def _assert_no_legacy_keys(irdoc: IRDoc) -> None:
             continue
         for key in step.params:
             assert key not in FORBIDDEN_KEYS, (
-                f"Step {i} op={step.op!r} has forbidden param key {key!r} after validate(). "
+                f"Step {i} op={step.op!r} has forbidden param key {key!r} after validate(). ",
                 "Legacy keys must be normalized in IRDoc.validate()."
             )
 
@@ -205,7 +205,7 @@ V1_CANON_SANS = FIXTURES_DIR / "v1_canon.sans"
 
 def test_no_legacy_params_after_validate_sas_and_sans(tmp_path):
     """
-    Compile+emit one SAS and one SANS fixture; load each plan.ir.json, build IRDoc,
+    Compile+emit one SAS and one SANS fixture; load each plan.ir.json, build IRDoc
     call validate(), then assert no legacy keys and canonical shapes.
     """
     out_sas = tmp_path / "sas"
@@ -220,7 +220,7 @@ def test_no_legacy_params_after_validate_sas_and_sans(tmp_path):
         "v1_canon.sas",
         tables={"in"},
         out_dir=out_sas,
-    )
+    legacy_sas=True)
     assert report_sas["status"] == "ok", report_sas.get("primary_error", report_sas)
 
     # SANS: datasource, compute, filter, select, rename, sort, aggregate, save, const, let_scalar
@@ -230,7 +230,7 @@ def test_no_legacy_params_after_validate_sas_and_sans(tmp_path):
         "v1_canon.sans",
         tables=set(),
         out_dir=out_sans,
-    )
+    legacy_sas=True)
     assert report_sans["status"] == "ok", report_sans.get("primary_error", report_sans)
 
     for out_dir in (out_sas, out_sans):

@@ -10,12 +10,12 @@ def test_irdoc_serialization():
         inputs=["in_table"],
         outputs=["out_table"],
         params={"key": "value"},
-        loc=Loc("test.sas", 1, 5)
+        loc=Loc("test.sas", 1, 5),
     )
     unknown_step = UnknownBlockStep(
         code="SANS_TEST_UNKNOWN",
         message="Unknown block type encountered",
-        loc=Loc("test.sas", 6, 6)
+        loc=Loc("test.sas", 6, 6),
     )
 
     # Create an IRDoc
@@ -97,7 +97,7 @@ def test_irdoc_validate_reraise_unknown_block_step():
     unknown_step = UnknownBlockStep(
         code="SANS_TEST_UNKNOWN_PRE_EXISTING",
         message="A pre-existing unknown block",
-        loc=Loc("test.sas", 1, 1)
+        loc=Loc("test.sas", 1, 1),
     )
     irdoc = IRDoc(steps=[unknown_step])
 

@@ -33,7 +33,7 @@ def test_emit_check_artifacts_success():
             "test.sas",
             tables={"in"},
             out_dir=temp_dir,
-        )
+        legacy_sas=True)
 
         assert report["status"] == "ok"
         plan = json.loads((temp_dir / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
@@ -55,7 +55,7 @@ def test_emit_check_artifacts_refusal():
             script,
             "test.sas",
             out_dir=temp_dir,
-        )
+        legacy_sas=True)
 
         assert report["status"] == "refused"
         assert report["primary_error"]["code"] == "SANS_PARSE_UNSUPPORTED_STATEMENT"
@@ -81,7 +81,7 @@ def test_emit_check_artifacts_refusal_plan_matches_report():
             script,
             "test.sas",
             out_dir=temp_dir,
-        )
+        legacy_sas=True)
         assert report["status"] == "refused"
         primary = report["primary_error"]
         plan = json.loads((temp_dir / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
@@ -108,7 +108,7 @@ def test_emit_check_artifacts_refusal_error_shape():
             "test.sas",
             tables={"in"},
             out_dir=temp_dir,
-        )
+        legacy_sas=True)
         assert report["status"] == "refused"
         primary = report["primary_error"]
         assert set(primary.keys()) >= {"code", "message", "loc"}

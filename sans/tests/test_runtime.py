@@ -39,6 +39,7 @@ def test_run_hello_world(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -89,6 +90,7 @@ def test_run_proc_sort_ok(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -130,6 +132,7 @@ def test_run_coalesce_ok(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -158,6 +161,7 @@ def test_run_missing_input_file_fails(tmp_path):
         bindings={"in": str(tmp_path / "missing.csv")},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "failed"
@@ -208,6 +212,7 @@ def test_run_merge_by_carries_values(tmp_path):
         bindings={"a": str(a_csv), "b": str(b_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -257,6 +262,7 @@ def test_run_by_first_outputs_only_first(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -301,6 +307,7 @@ def test_run_if_then_else_with_ne(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -350,6 +357,7 @@ def test_run_filter_on_last_flag(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -393,6 +401,7 @@ def test_run_comparison_keywords_in_filter(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -435,6 +444,7 @@ def test_run_sort_is_stable(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -482,6 +492,7 @@ def test_run_retain_persists_values(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -525,6 +536,7 @@ def test_run_missing_comparison_filters_out(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -573,6 +585,7 @@ def test_run_is_deterministic(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=out_a,
         strict=True,
+        legacy_sas=True,
     )
     report_b = run_script(
         text=script,
@@ -580,6 +593,7 @@ def test_run_is_deterministic(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=out_b,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report_a["status"] == "ok"
@@ -623,6 +637,7 @@ def test_run_keep_preserves_column_order(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -677,6 +692,7 @@ def test_run_merge_in_flags(tmp_path):
         bindings={"a": str(a_csv), "b": str(b_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -727,6 +743,7 @@ def test_run_by_group_multikey_last(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -771,6 +788,7 @@ def test_run_explicit_output_suppresses_default(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -813,6 +831,7 @@ def test_run_missing_arithmetic_yields_missing(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -855,6 +874,7 @@ def test_run_dataset_options_applied_at_read_time(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -899,6 +919,7 @@ def test_run_proc_transpose_last_wins(tmp_path):
         bindings={"lb": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -953,6 +974,7 @@ def test_run_merge_dataset_where_option(tmp_path):
         bindings={"a": str(a_csv), "b": str(b_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -991,6 +1013,7 @@ def test_run_dataset_options_drop_and_rename(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -1029,6 +1052,7 @@ def test_run_dataset_where_string_and_missing(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -1071,6 +1095,7 @@ def test_run_transpose_id_missing_fails(tmp_path):
         bindings={"lb": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "failed"
@@ -1107,6 +1132,7 @@ def test_run_transpose_id_collision_fails(tmp_path):
         bindings={"lb": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "failed"
@@ -1153,6 +1179,7 @@ def test_run_merge_mixed_dataset_options(tmp_path):
         bindings={"a": str(a_csv), "b": str(b_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -1194,6 +1221,7 @@ def test_run_unsorted_by_fails_in_runtime(tmp_path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=False,
+        legacy_sas=True,
     )
 
     assert report["status"] == "refused"
@@ -1246,6 +1274,7 @@ def test_run_merge_many_to_many_fails(tmp_path):
         bindings={"a": str(a_csv), "b": str(b_csv)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "failed"
@@ -1275,6 +1304,7 @@ def test_run_cast_sans(tmp_path):
         bindings={},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
     assert report["status"] == "ok"
     assert report["runtime"]["status"] == "ok"

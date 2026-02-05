@@ -20,7 +20,7 @@ class TestDataStepCompiler:
               set in_table;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 1
         step = irdoc.steps[0]
@@ -38,7 +38,7 @@ class TestDataStepCompiler:
               keep col1 col2;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 1
         
@@ -57,7 +57,7 @@ class TestDataStepCompiler:
               drop colA colB;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 1
         
@@ -76,7 +76,7 @@ class TestDataStepCompiler:
               rename old1=new1 old2=new2;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 1
         
@@ -96,7 +96,7 @@ class TestDataStepCompiler:
               y = 10 * c;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 1
         
@@ -127,7 +127,7 @@ class TestDataStepCompiler:
               if a > 10;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 1
         
@@ -146,7 +146,7 @@ class TestDataStepCompiler:
               y = x + 1;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in"})
+        irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 4
 
@@ -163,7 +163,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_DATASET_OPTION_UNKNOWN"
 
     def test_data_step_dataset_option_case_normalized(self):
@@ -173,7 +173,7 @@ class TestDataStepCompiler:
               keep a;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in"})
+        irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert irdoc.steps[0].inputs == ["in"]
 
     def test_data_step_all_operations_canonical_order(self):
@@ -186,9 +186,9 @@ class TestDataStepCompiler:
               if new_col > 100 or colY ^= "test";
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"initial_in"})
+        irdoc = check_script(script, "test.sas", tables={"initial_in"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
-        assert len(irdoc.steps) == 4 # rename, compute, filter, select
+        assert len(irdoc.steps) == 4  # rename, compute, filter, select
 
         # 1. Rename
         rename_step = irdoc.steps[0]
@@ -226,7 +226,7 @@ class TestDataStepCompiler:
         select_step = irdoc.steps[3]
         assert select_step.op == "select"
         assert select_step.inputs == [filter_step.outputs[0]]
-        assert select_step.outputs == ["final_out"] # Final output
+        assert select_step.outputs == ["final_out"]  # Final output
         assert select_step.params == {"cols": ["colX", "colY"]}
         assert select_step.loc == L("test.sas", 2, 8)
 
@@ -244,7 +244,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in_table"})
+            check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         
         if detected_token == "proc":
             assert exc_info.value.code == "SANS_PARSE_UNSUPPORTED_PROC"
@@ -262,7 +262,7 @@ class TestDataStepCompiler:
               x = a + b * 2;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in"})
+        irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         compute_step = irdoc.steps[0]
         expected_expr = binop("+", col("a"), binop("*", col("b"), lit(2)))
         assert compute_step.params["assign"][0]["expr"] == expected_expr
@@ -274,7 +274,7 @@ class TestDataStepCompiler:
               if a > 1 and b < 2 or c = 5;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in"})
+        irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         filter_step = irdoc.steps[0]
         # Expected: (a > 1 and b < 2) or c = 5
         expected_predicate = boolop(
@@ -287,7 +287,7 @@ class TestDataStepCompiler:
                         binop("<", col("b"), lit(2)),
                     ],
                 ),
-                binop("=", col("c"), lit(5)),
+                binop("==", col("c"), lit(5)),
             ],
         )
         assert filter_step.params["predicate"] == expected_predicate
@@ -299,7 +299,7 @@ class TestDataStepCompiler:
               x = (a + b) * c;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in"})
+        irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         compute_step = irdoc.steps[0]
         expected_expr = binop("*", binop("+", col("a"), col("b")), col("c"))
         assert compute_step.params["assign"][0]["expr"] == expected_expr
@@ -312,7 +312,7 @@ class TestDataStepCompiler:
               y = if(z > 0, 1, 0);
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in"})
+        irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         compute_step = irdoc.steps[0]
         
         expected_assigns = [
@@ -336,18 +336,18 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas")
+            check_script(script, "test.sas", legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_SET_STATEMENT_MALFORMED"
 
     def test_malformed_rename_statement(self):
         script = textwrap.dedent("""
             data out;
               set in;
-              rename a b; # Missing '='
+              rename a b;  # Missing '='
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_RENAME_MALFORMED"
 
     # --- Multiple of same statement ---
@@ -360,7 +360,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_UNSUPPORTED_DATASTEP_FORM"
         assert "at most one KEEP or DROP statement" in exc_info.value.message
     
@@ -373,7 +373,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_UNSUPPORTED_DATASTEP_FORM"
         assert "at most one KEEP or DROP statement" in exc_info.value.message
 
@@ -386,7 +386,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_UNSUPPORTED_DATASTEP_FORM"
         assert "at most one IF statement for filtering" in exc_info.value.message
 
@@ -398,7 +398,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_UNSUPPORTED_DATASTEP_FORM"
         assert "Unsupported statement or unparsed content in data step: 'unknown_statement'" in exc_info.value.message
         assert exc_info.value.loc == L("test.sas", 2, 5)
@@ -411,7 +411,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"a", "b"})
+            check_script(script, "test.sas", tables={"a", "b"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_DATASTEP_MISSING_BY"
         assert "requires a BY statement" in exc_info.value.message
 
@@ -423,7 +423,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_SORT_UNSUPPORTED_OPTION"
         assert "Unsupported options in PROC SORT header: dupout=dups" in exc_info.value.message
         assert exc_info.value.loc == L("test.sas", 2, 2)
@@ -434,7 +434,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_SORT_MISSING_BY"
         assert "PROC SORT requires exactly one BY statement." in exc_info.value.message
     
@@ -446,7 +446,7 @@ class TestDataStepCompiler:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in"})
+            check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_PARSE_SORT_UNSUPPORTED_BODY_STATEMENT"
         assert "PROC SORT contains unsupported statements in its body." in exc_info.value.message
 
@@ -460,7 +460,7 @@ class TestDataStepCompiler:
               by x;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"raw"})
+        irdoc = check_script(script, "test.sas", tables={"raw"}, legacy_sas=True)
         assert isinstance(irdoc, IRDoc)
         assert len(irdoc.steps) == 2
 
@@ -482,9 +482,9 @@ class TestSortednessFacts:
               by col1 col2;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert irdoc.table_facts["sorted_table"].sorted_by == ["col1", "col2"]
-        assert irdoc.steps[0].loc == L("test.sas", 2, 4) # Loc of the sort step
+        assert irdoc.steps[0].loc == L("test.sas", 2, 4)  # Loc of the sort step
 
     def test_identity_preserves_sorted_by(self):
         script = textwrap.dedent("""
@@ -492,8 +492,8 @@ class TestSortednessFacts:
               set in_table;
             run;
         """)
-        # Simulate in_table being sorted
-        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["key"]}})
+        # Simulate in_table being sorted,
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["key"]}}, legacy_sas=True)
         assert irdoc.table_facts["out_table"].sorted_by == ["key"]
         assert irdoc.steps[0].loc == L("test.sas", 2, 4)
 
@@ -504,7 +504,7 @@ class TestSortednessFacts:
               keep id date colA;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["id", "date"]}})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["id", "date"]}}, legacy_sas=True)
         assert irdoc.table_facts["out_table"].sorted_by == ["id", "date"]
         assert irdoc.steps[0].loc == L("test.sas", 2, 5)
 
@@ -515,7 +515,7 @@ class TestSortednessFacts:
               if value > 10;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["id"]}})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["id"]}}, legacy_sas=True)
         assert irdoc.table_facts["out_table"].sorted_by == ["id"]
         assert irdoc.steps[0].loc == L("test.sas", 2, 5)
 
@@ -526,7 +526,7 @@ class TestSortednessFacts:
               new_col = old_col * 2;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["category"]}})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["category"]}}, legacy_sas=True)
         assert irdoc.table_facts["out_table"].sorted_by == ["category"]
         assert irdoc.steps[0].loc == L("test.sas", 2, 5)
 
@@ -537,7 +537,7 @@ class TestSortednessFacts:
               rename old_id=new_id;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["old_id"]}})
+        irdoc = check_script(script, "test.sas", tables={"in_table"}, initial_table_facts={"in_table": {"sorted_by": ["old_id"]}}, legacy_sas=True)
         assert irdoc.table_facts["out_table"].sorted_by is None
         assert irdoc.steps[0].loc == L("test.sas", 2, 5)
 
@@ -555,9 +555,9 @@ class TestSortednessFacts:
               rename old_amt=new_amt;
             run;
         """)
-        irdoc = check_script(script, "test.sas", tables={"raw"})
+        irdoc = check_script(script, "test.sas", tables={"raw"}, legacy_sas=True)
         assert irdoc.table_facts["temp_sorted"].sorted_by == ["order_id"]
-        assert irdoc.table_facts["temp_filtered"].sorted_by == ["order_id"] # Preserved through filter
+        assert irdoc.table_facts["temp_filtered"].sorted_by == ["order_id"]  # Preserved through filter
         assert irdoc.table_facts["final_renamed"].sorted_by is None # Dropped by rename
 
     def test_proc_sort_validation_missing_by(self):
@@ -588,7 +588,7 @@ class TestSortednessFacts:
             run;
         """)
         with pytest.raises(UnknownBlockStep) as exc_info:
-            check_script(script, "test.sas", tables={"in_table"})
+            check_script(script, "test.sas", tables={"in_table"}, legacy_sas=True)
         assert exc_info.value.code == "SANS_VALIDATE_ORDER_REQUIRED"
         assert "must be sorted by ['id']" in exc_info.value.message
         assert exc_info.value.loc == L("test.sas", 2, 6)

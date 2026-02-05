@@ -14,6 +14,7 @@ def _run(script: str, out_dir: Path) -> dict:
         bindings={},
         out_dir=out_dir,
         strict=True,
+        legacy_sas=True,
     )
     assert report["status"] == "ok"
     evidence_path = out_dir / "artifacts" / "runtime.evidence.json"

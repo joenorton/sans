@@ -117,6 +117,7 @@ def compile_script(
     include_roots: Optional[List[Path]] = None,
     allow_absolute_includes: bool = False,
     allow_include_escape: bool = False,
+    legacy_sas: bool = False,
 ) -> IRDoc:
     """
     Performs compilation of a SANS script into an IRDoc without validation.
@@ -183,7 +184,7 @@ def compile_script(
     for idx, block in enumerate(blocks):
         if block.kind == "data":
             # recognize_data_block returns a list of steps
-            data_steps = recognize_data_block(block)
+            data_steps = recognize_data_block(block, legacy_sas=legacy_sas)
             ir_steps.extend(data_steps)
         elif block.kind == "proc":
             # For now, only 'proc sort' is supported. Refuse others.
@@ -194,7 +195,7 @@ def compile_script(
                 step = recognize_proc_transpose_block(block)
                 ir_steps.append(step)
             elif block.header.text.lower().startswith("proc sql"):
-                step = recognize_proc_sql_block(block)
+                step = recognize_proc_sql_block(block, legacy_sas=legacy_sas)
                 ir_steps.append(step)
             elif block.header.text.lower().startswith("proc format"):
                 steps = recognize_proc_format_block(block)
@@ -334,6 +335,7 @@ def check_script(
     include_roots: Optional[List[Path]] = None,
     allow_absolute_includes: bool = False,
     allow_include_escape: bool = False,
+    legacy_sas: bool = False,
 ) -> IRDoc:
     """
     Performs a full compilation check of a SANS script (compile + validate).
@@ -346,6 +348,7 @@ def check_script(
         include_roots=include_roots,
         allow_absolute_includes=allow_absolute_includes,
         allow_include_escape=allow_include_escape,
+        legacy_sas=legacy_sas,
     )
     validated_table_facts = initial_irdoc.validate()
     return IRDoc(steps=initial_irdoc.steps, tables=initial_irdoc.tables, table_facts=validated_table_facts)
@@ -365,6 +368,7 @@ def emit_check_artifacts(
     allow_absolute_includes: bool = False,
     allow_include_escape: bool = False,
     emit_vars_graph: bool = True,
+    legacy_sas: bool = False,
 ) -> Tuple[IRDoc, Dict[str, Any]]:
     """
     Compile + validate, then emit plan and report artifacts.
@@ -406,6 +410,7 @@ def emit_check_artifacts(
             include_roots=include_roots,
             allow_absolute_includes=allow_absolute_includes,
             allow_include_escape=allow_include_escape,
+            legacy_sas=legacy_sas,
         )
     compile_ms = int((perf_counter() - compile_start) * 1000)
 

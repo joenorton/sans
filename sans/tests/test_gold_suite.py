@@ -43,7 +43,7 @@ def test_gold_merge_1_to_many(tmp_path):
         bindings={"a": str(a), "b": str(b)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -82,7 +82,7 @@ def test_gold_merge_many_to_many_refusal(tmp_path):
         bindings={"a": str(a), "b": str(b)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_MERGE_MANY_MANY"
@@ -107,7 +107,7 @@ def test_gold_dataset_options_precedence(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -137,7 +137,7 @@ def test_gold_missing_comparisons(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -167,7 +167,7 @@ def test_gold_missing_arithmetic(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -196,7 +196,7 @@ def test_gold_sort_nodupkey_first_wins(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -237,7 +237,7 @@ def test_gold_transpose_duplicate_id_last_wins(tmp_path):
         bindings={"lb": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "lb_wide.csv")
@@ -270,7 +270,7 @@ def test_gold_sql_left_join_null_fill(tmp_path):
         bindings={"t1": str(t1), "t2": str(t2)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -302,7 +302,7 @@ def test_gold_sql_groupby_deterministic_order(tmp_path):
         bindings={"t1": str(t1)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -336,7 +336,7 @@ def test_gold_sql_ambiguous_column_error(tmp_path):
         bindings={"t1": str(t1), "t2": str(t2)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_SQL_AMBIGUOUS_COLUMN"
@@ -351,7 +351,7 @@ def test_gold_structured_unsupported_error_shape(tmp_path):
         bindings={},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "refused"
     primary = report["primary_error"]
@@ -379,7 +379,7 @@ def test_gold_input_best_informat(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -410,7 +410,7 @@ def test_gold_summary_mean_autoname(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -457,7 +457,7 @@ def test_gold_format_put_mapping(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -487,7 +487,7 @@ def test_gold_format_put_unknown_format_error(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_FORMAT_UNDEFINED"
@@ -515,14 +515,14 @@ def test_gold_determinism_repeat_run(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_a,
         strict=True,
-    )
+    legacy_sas=True)
     report_b = run_script(
         text=script,
         file_name="gold_determinism_b.sas",
         bindings={"in": str(inp)},
         out_dir=out_b,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report_a["status"] == "ok"
     assert report_b["status"] == "ok"

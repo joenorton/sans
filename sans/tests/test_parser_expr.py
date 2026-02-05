@@ -45,13 +45,6 @@ def test_parse_comparisons():
     assert parse_expression_from_string("a == b") == binop("==", col("a"), col("b"))
     assert parse_expression_from_string("a != b") == binop("!=", col("a"), col("b"))
     assert parse_expression_from_string("a > 10") == binop(">", col("a"), lit(10))
-    assert parse_expression_from_string("x ~= y") == binop("!=", col("x"), col("y"))
-    assert parse_expression_from_string("a ne b") == binop("!=", col("a"), col("b"))
-    assert parse_expression_from_string("a eq b") == binop("==", col("a"), col("b"))
-    assert parse_expression_from_string("a lt b") == binop("<", col("a"), col("b"))
-    assert parse_expression_from_string("a le b") == binop("<=", col("a"), col("b"))
-    assert parse_expression_from_string("a gt b") == binop(">", col("a"), col("b"))
-    assert parse_expression_from_string("a ge b") == binop(">=", col("a"), col("b"))
     with pytest.raises(SansScriptError) as exc_info:
         parse_sans_script(
             "# sans 0.1\n"
@@ -60,6 +53,30 @@ def test_parse_comparisons():
             "bad_expr.sans",
         )
     assert exc_info.value.code == "E_BAD_EXPR"
+
+def test_sans_expr_rejects_legacy_tokens():
+    with pytest.raises(SansScriptError) as exc_info:
+        parse_sans_script(
+            "# sans 0.1\n"
+            "table t = from(in) filter a eq 1\n",
+            "legacy_eq.sans",
+        )
+    assert exc_info.value.code == "E_BAD_EXPR"
+
+    with pytest.raises(SansScriptError) as exc_info:
+        parse_sans_script(
+            "# sans 0.1\n"
+            "table t = from(in) filter a = 1\n",
+            "legacy_eq2.sans",
+        )
+    assert exc_info.value.code == "E_BAD_EXPR"
+
+    # == remains valid
+    parse_sans_script(
+        "# sans 0.1\n"
+        "table t = from(in) filter a == 1\n",
+        "ok_eq.sans",
+    )
 
 def test_parse_logical_operators_precedence():
     # if a > 1 and b < 2 works

@@ -62,7 +62,7 @@ def test_hello_xpt_roundtrip(tmp_path):
     ret = main([
         "run", str(script2_path),
         "--out", str(out2_dir),
-        "--tables", f"intermediate={out1_xpt}"
+        "--tables", f"intermediate={out1_xpt}",
     ])
     assert ret == 0
     
@@ -92,8 +92,8 @@ def test_xpt_determinism(tmp_path):
     out_a = tmp_path / "a"
     out_b = tmp_path / "b"
     
-    main(["run", str(script_path), "--out", str(out_a), "--tables", f"source={in_csv}", "--format", "xpt"])
-    main(["run", str(script_path), "--out", str(out_b), "--tables", f"source={in_csv}", "--format", "xpt"])
+    main(["run", str(script_path), "--out", str(out_a), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
+    main(["run", str(script_path), "--out", str(out_b), "--tables", f"source={in_csv}", "--format", "xpt", "--legacy-sas"])
     
     bytes_a = (out_a / "outputs" / "out.xpt").read_bytes()
     bytes_b = (out_b / "outputs" / "out.xpt").read_bytes()

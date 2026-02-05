@@ -22,7 +22,7 @@ def test_proc_sql_parse_ok():
           where a.id >= 1;
         quit;
     """)
-    irdoc = check_script(script, "test.sas", tables={"t1", "t2"})
+    irdoc = check_script(script, "test.sas", tables={"t1", "t2"}, legacy_sas=True)
     assert len(irdoc.steps) == 1
     step = irdoc.steps[0]
     assert isinstance(step, OpStep)
@@ -39,7 +39,7 @@ def test_proc_sql_subselect_refused():
         quit;
     """)
     with pytest.raises(UnknownBlockStep) as exc_info:
-        check_script(script, "test.sas", tables={"t1"})
+        check_script(script, "test.sas", tables={"t1"}, legacy_sas=True)
     assert exc_info.value.code == "SANS_PARSE_SQL_UNSUPPORTED_FORM"
     assert exc_info.value.loc.file == "test.sas"
 
@@ -54,7 +54,7 @@ def test_proc_sql_join_requires_explicit_type():
         quit;
     """)
     with pytest.raises(UnknownBlockStep) as exc_info:
-        check_script(script, "test.sas", tables={"t1", "t2"})
+        check_script(script, "test.sas", tables={"t1", "t2"}, legacy_sas=True)
     assert exc_info.value.code == "SANS_PARSE_SQL_UNSUPPORTED_FORM"
 
 
@@ -68,7 +68,7 @@ def test_proc_sql_groupby_requires_selected_keys():
         quit;
     """)
     with pytest.raises(UnknownBlockStep) as exc_info:
-        check_script(script, "test.sas", tables={"t1"})
+        check_script(script, "test.sas", tables={"t1"}, legacy_sas=True)
     assert exc_info.value.code == "SANS_PARSE_SQL_UNSUPPORTED_FORM"
 
 
@@ -83,6 +83,7 @@ def test_proc_sql_unsupported_error_shape(tmp_path):
         "bad_sql.sas",
         tables={"t1"},
         out_dir=tmp_path,
+        legacy_sas=True,
     )
     assert report["status"] == "refused"
     primary = report["primary_error"]
@@ -113,6 +114,7 @@ def test_proc_sql_ambiguous_column_errors(tmp_path):
         bindings={"t1": str(t1), "t2": str(t2)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "failed"
@@ -142,6 +144,7 @@ def test_proc_sql_left_join_null_fill(tmp_path):
         bindings={"t1": str(t1), "t2": str(t2)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"
@@ -176,6 +179,7 @@ def test_proc_sql_groupby_aggregate(tmp_path):
         bindings={"t1": str(t1)},
         out_dir=tmp_path,
         strict=True,
+        legacy_sas=True,
     )
 
     assert report["status"] == "ok"

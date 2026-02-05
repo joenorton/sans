@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
     check_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
     check_parser.add_argument("--allow-include-escape", action="store_true", default=False)
+    check_parser.add_argument("--legacy-sas", action="store_true", default=False, help="Enable legacy SAS expression operators for .sas")
 
     run_parser = subparsers.add_parser("run", help="Compile, validate, and execute a script")
     run_parser.add_argument("script", help="Path to the script file")
@@ -112,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
     run_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
     run_parser.add_argument("--allow-include-escape", action="store_true", default=False)
+    run_parser.add_argument("--legacy-sas", action="store_true", default=False, help="Enable legacy SAS expression operators for .sas")
 
     validate_parser = subparsers.add_parser("validate", help="Validate tables against a profile")
     validate_parser.add_argument("--profile", required=True, help="Validation profile (e.g., sdtm)")
@@ -237,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
             include_roots=include_roots,
             allow_absolute_includes=args.allow_absolute_include,
             allow_include_escape=args.allow_include_escape,
+            legacy_sas=args.legacy_sas,
         )
 
         status = report.get("status")
@@ -280,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
             include_roots=include_roots,
             allow_absolute_includes=args.allow_absolute_include,
             allow_include_escape=args.allow_include_escape,
+            legacy_sas=args.legacy_sas,
         )
 
         status = report.get("status")

@@ -11,14 +11,14 @@ def test_exit_bucket_runtime_is_50(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a\n1", encoding="utf-8")
     script = "data out; set in; x = 1/0; run;"
-    report = run_script(script, "fail.sas", {"in": str(in_csv)}, tmp_path)
+    report = run_script(script, "fail.sas", {"in": str(in_csv)}, tmp_path, legacy_sas=True)
     assert report["exit_code_bucket"] == 50
 
 def test_csv_newlines_lf(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2", encoding="utf-8")
     script = "data out; set in; run;"
-    run_script(script, "test.sas", {"in": str(in_csv)}, tmp_path)
+    run_script(script, "test.sas", {"in": str(in_csv)}, tmp_path, legacy_sas=True)
     out_csv = tmp_path / "outputs" / "out.csv"
     content = out_csv.read_bytes()
     assert b"\r\n" not in content
@@ -35,7 +35,7 @@ def test_sort_missing_first(tmp_path):
         writer.writerow(["1"])
     
     script = "proc sort data=in out=out; by a; run;"
-    run_script(script, "sort.sas", {"in": str(in_csv)}, tmp_path)
+    run_script(script, "sort.sas", {"in": str(in_csv)}, tmp_path, legacy_sas=True)
     rows = (tmp_path / "outputs" / "out.csv").read_text(encoding="utf-8").splitlines()
     # Missing sorts first (index 1 after header)
     assert rows[1] == '""'
@@ -48,7 +48,7 @@ def test_where_missing_comparisons(tmp_path):
         writer.writerow([""])
         writer.writerow(["5"])
     script = "data out; set in; if a < 5; run;"
-    run_script(script, "where.sas", {"in": str(in_csv)}, tmp_path)
+    run_script(script, "where.sas", {"in": str(in_csv)}, tmp_path, legacy_sas=True)
     rows = (tmp_path / "outputs" / "out.csv").read_text(encoding="utf-8").splitlines()
     assert rows == ["a", '""']
 
@@ -62,14 +62,14 @@ def test_decimal_precision_stable(tmp_path):
     long_val = "12345678901234567890.1234567890"
     in_csv.write_text(f"a\n{long_val}", encoding="utf-8")
     script = "data out; set in; b = a; run;"
-    run_script(script, "prec.sas", {"in": str(in_csv)}, tmp_path)
+    run_script(script, "prec.sas", {"in": str(in_csv)}, tmp_path, legacy_sas=True)
     content = (tmp_path / "outputs" / "out.csv").read_text(encoding="utf-8")
     assert long_val in content
 
 def test_duplicate_table_binding_errors(tmp_path):
     script = tmp_path / "s.sas"
     script.write_text("data out; set a; run;")
-    ret = main(["run", str(script), "--out", str(tmp_path), "--tables", "a=1.csv,a=2.csv"])
+    ret = main(["run", str(script), "--out", str(tmp_path), "--tables", "a=1.csv,a=2.csv", "--legacy-sas"])
     assert ret == 50
 
 def test_verify_detects_modified_report(tmp_path):
@@ -77,7 +77,7 @@ def test_verify_detects_modified_report(tmp_path):
     in_csv.write_text("a\n1", encoding="utf-8")
     script = tmp_path / "s.sas"
     script.write_text("data out; set in; run;")
-    main(["run", str(script), "--out", str(tmp_path), "--tables", f"in={in_csv}"])
+    main(["run", str(script), "--out", str(tmp_path), "--tables", f"in={in_csv}", "--legacy-sas"])
     
     report_path = tmp_path / "report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -97,8 +97,8 @@ def test_artifact_hashes_stable_for_same_inputs(tmp_path):
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
     
-    r1 = run_script(script, "s.sas", {"in": str(in_csv)}, out1)
-    r2 = run_script(script, "s.sas", {"in": str(in_csv)}, out2)
+    r1 = run_script(script, "s.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    r2 = run_script(script, "s.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
     
     h1 = [a["sha256"] for a in r1.get("artifacts", []) if "plan.ir.json" in (a.get("path") or "")]
     h2 = [a["sha256"] for a in r2.get("artifacts", []) if "plan.ir.json" in (a.get("path") or "")]
@@ -113,8 +113,8 @@ def test_double_run_determinism(tmp_path):
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
 
-    ret1 = main(["run", str(script_path), "--out", str(out1), "--tables", f"in={in_csv}"])
-    ret2 = main(["run", str(script_path), "--out", str(out2), "--tables", f"in={in_csv}"])
+    ret1 = main(["run", str(script_path), "--out", str(out1), "--tables", f"in={in_csv}", "--legacy-sas"])
+    ret2 = main(["run", str(script_path), "--out", str(out2), "--tables", f"in={in_csv}", "--legacy-sas"])
     assert ret1 == 0
     assert ret2 == 0
 

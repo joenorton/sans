@@ -16,7 +16,7 @@ def test_contract_identities(tmp_path):
     script = "data out; set in; c = a + b; run;"
     out_dir = tmp_path / "out"
     
-    run_script(script, "test.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "test.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     
     plan_path = out_dir / "artifacts" / "plan.ir.json"
     registry_path = out_dir / "artifacts" / "registry.candidate.json"
@@ -76,8 +76,8 @@ def test_identity_stability(tmp_path):
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
     
-    run_script(script, "test.sas", {"in": str(in_csv)}, out1)
-    run_script(script, "test.sas", {"in": str(in_csv)}, out2)
+    run_script(script, "test.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    run_script(script, "test.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
     
     p1 = json.loads((out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
     p2 = json.loads((out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
@@ -98,8 +98,8 @@ def test_wiring_vs_transform_id(tmp_path):
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
     
-    run_script(script1, "s1.sas", {"in1": str(in1)}, out1)
-    run_script(script2, "s2.sas", {"in2": str(in2)}, out2)
+    run_script(script1, "s1.sas", {"in1": str(in1)}, out1, legacy_sas=True)
+    run_script(script2, "s2.sas", {"in2": str(in2)}, out2, legacy_sas=True)
     
     p1 = json.loads((out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
     p2 = json.loads((out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
@@ -120,8 +120,8 @@ def test_params_change_transform_id(tmp_path):
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
     
-    run_script(script1, "s1.sas", {"in": str(in_csv)}, out1)
-    run_script(script2, "s2.sas", {"in": str(in_csv)}, out2)
+    run_script(script1, "s1.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    run_script(script2, "s2.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
     
     p1 = json.loads((out1 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
     p2 = json.loads((out2 / "artifacts" / "plan.ir.json").read_text(encoding="utf-8"))
@@ -134,11 +134,11 @@ def test_path_normalization(tmp_path):
     in_csv.write_text("a\n1", encoding="utf-8")
     # Force a backslash if possible (though on Linux it won't matter, on Windows it will)
     in_path_str = str(in_csv)
-    
+
     script = "data out; set in; run;"
     out_dir = tmp_path / "out"
-    run_script(script, "test.sas", {"in": in_path_str}, out_dir)
-    
+    run_script(script, "test.sas", {"in": in_path_str}, out_dir, legacy_sas=True)
+
     evidence = json.loads((out_dir / "artifacts" / "runtime.evidence.json").read_text(encoding="utf-8"))
     
     # All paths in evidence must use forward slashes

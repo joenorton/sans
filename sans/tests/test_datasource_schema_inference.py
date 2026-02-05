@@ -30,7 +30,7 @@ def test_csv_header_inference(tmp_path: Path) -> None:
         "save out to \"out.csv\"\n"
     )
     out_dir = tmp_path / "out"
-    report = run_script(script, "test.sans", {}, out_dir)
+    report = run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
     assert report["status"] == "ok"
     evidence = _evidence(out_dir)
     assert evidence["datasources"]["lb"]["columns"] == ["A", "B"]
@@ -44,7 +44,7 @@ def test_inline_csv_header_inference(tmp_path: Path) -> None:
         "save out to \"out.csv\"\n"
     )
     out_dir = tmp_path / "out"
-    report = run_script(script, "test.sans", {}, out_dir)
+    report = run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
     assert report["status"] == "ok"
     evidence = _evidence(out_dir)
     assert evidence["datasources"]["raw"]["columns"] == ["a", "b"]
@@ -60,7 +60,7 @@ def test_pinned_columns_validation(tmp_path: Path) -> None:
         "save out to \"out.csv\"\n"
     )
     out_dir = tmp_path / "out"
-    report = run_script(script, "test.sans", {}, out_dir)
+    report = run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
     assert report["status"] == "failed"
     primary = report.get("primary_error") or {}
     assert primary.get("code") == "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH"
@@ -83,7 +83,7 @@ def test_vars_graph_uses_inferred_schema(tmp_path: Path, caplog) -> None:
     )
     out_dir = tmp_path / "out"
     with caplog.at_level(logging.WARNING):
-        report = run_script(script, "test.sans", {}, out_dir)
+        report = run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
     assert report["status"] == "ok"
     assert not any("schema unknown" in r.message for r in caplog.records)
 

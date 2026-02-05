@@ -43,7 +43,7 @@ def test_macro_m0_and_control_flow(tmp_path):
     out_dir = tmp_path / "out"
     
     # 3. Run
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"in={in_csv}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"in={in_csv}", "--legacy-sas"])
     assert ret == 0
     
     # 4. Verify preprocessed.sas exists
@@ -89,9 +89,9 @@ def test_macro_undefined_var(tmp_path):
     
     out_dir = tmp_path / "out"
     # This should fail during compilation (expression error) because &UNDEFINED. remains
-    # and is not valid SAS syntax for an expression unless it's a variable name, 
+    # and is not valid SAS syntax for an expression unless it's a variable name
     # but the dot makes it &UNDEFINED. which is invalid.
     
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", "in=in.csv"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", "in=in.csv", "--legacy-sas"])
     # It might fail with SANS_PARSE_EXPRESSION_ERROR
     assert ret != 0

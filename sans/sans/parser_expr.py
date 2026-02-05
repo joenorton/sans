@@ -16,11 +16,10 @@ TOKEN_PATTERNS = [
     (fr"\b{IDENT_RE}\.{IDENT_RE}\b", "IDENTIFIER"), # Qualified identifiers
     (r"\b(and|or|not)\b", "KEYWORD_LOGICAL"),
     (r"\b(coalesce|if|put|input)\b", "KEYWORD_FUNCTION"), # Allowlisted functions
-    (r"\b(ne|eq|lt|le|gt|ge)\b", "OPERATOR"), # SAS-style comparison keywords
     (r"\bnull\b|\.", "NULL"), # Null literal (handle both 'null' keyword and '.' for SAS)
     (fr"\b{IDENT_RE}\b", "IDENTIFIER"), # Column references / variable names
     (r"\d+(?:\.\d*)?", "NUMBER"), # Numeric literals (int or float)
-    (r"==|!=|<=|>=|\^=|~=|=|<|>|\+|-|\*|\/", "OPERATOR"), # Multi-char operators first, then single-char
+    (r"==|!=|<=|>=|<|>|\+|-|\*|\/", "OPERATOR"), # Multi-char operators first, then single-char
     (r"\(", "LPAREN"),
     (r"\)", "RPAREN"),
     (r"\[", "LBRACKET"),
@@ -73,8 +72,7 @@ PRECEDENCE = {
     'or': 1,
     'and': 2,
     'not': 3, # Unary operator
-    '=': 4, '==': 4, '!=': 4, '<': 4, '>': 4, '<=': 4, '>=': 4, '^=': 4, '~=': 4,
-    'ne': 4, 'eq': 4, 'lt': 4, 'le': 4, 'gt': 4, 'ge': 4,
+    '==': 4, '!=': 4, '<': 4, '>': 4, '<=': 4, '>=': 4,
     '+': 5, '-': 5,
     '*': 6, '/': 6,
 }
@@ -192,19 +190,9 @@ class Parser:
                     args.append(right_expr)
                 left_expr = boolop(op_value_lower, args)
             else:
-                op_map = {
-                    "^=": "!=",
-                    "~=": "!=",
-                    "ne": "!=",
-                    "eq": "==",
-                    "==": "==",
-                    "lt": "<",
-                    "le": "<=",
-                    "gt": ">",
-                    "ge": ">=",
-                }
-                op_norm = op_map.get(op_value_lower, op_value_lower)
-                left_expr = binop(op_norm, left_expr, right_expr)
+                if op_value_lower not in PRECEDENCE:
+                    raise ValueError(f"Unsupported operator '{op_token.value}'")
+                left_expr = binop(op_value_lower, left_expr, right_expr)
             
         return left_expr
 

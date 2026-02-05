@@ -384,7 +384,7 @@ def test_sort_missing_by_refused():
         "  6,7\n"
         "  3,2\n"
         "end\n"
-    "table baz = sort(bar)\n"
+        "table baz = sort(bar)\n"
     )
     irdoc = compile_sans_script(script, "script.sans", tables={"bar"})
     try:

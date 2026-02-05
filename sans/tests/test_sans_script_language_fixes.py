@@ -145,6 +145,7 @@ def test_uppercase_headers_parse_and_execute(tmp_path: Path):
         bindings={},
         out_dir=out_dir,
         strict=True,
+        legacy_sas=True,
     )
     assert report["status"] == "ok"
     out_csv = out_dir / "outputs" / "out.csv"

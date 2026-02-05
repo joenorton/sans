@@ -38,7 +38,7 @@ def test_gold_control_flow_do_end_nested(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -70,7 +70,7 @@ def test_gold_control_flow_select_exhaustive_error(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_SELECT_MISMATCH"
@@ -98,7 +98,7 @@ def test_gold_control_flow_loop_by_step(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -132,7 +132,7 @@ def test_gold_control_flow_loop_negative_step(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     rows = _read_csv(out_dir / "outputs" / "out.csv")
@@ -165,7 +165,7 @@ def test_gold_control_flow_loop_bound_refusal(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "refused"
     assert report["primary_error"]["code"] == "SANS_PARSE_LOOP_BOUND_UNSUPPORTED"
@@ -192,7 +192,7 @@ def test_gold_control_flow_loop_step_zero_refusal(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "refused"
     assert report["primary_error"]["code"] == "SANS_PARSE_LOOP_BOUND_UNSUPPORTED"
@@ -219,7 +219,7 @@ def test_gold_control_flow_loop_cap(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_LOOP_LIMIT"
@@ -245,7 +245,7 @@ def test_gold_control_flow_nesting_depth_cap(tmp_path):
         bindings={"in": str(inp)},
         out_dir=out_dir,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_CONTROL_DEPTH"

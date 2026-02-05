@@ -1,6 +1,6 @@
 """
 Golden / acceptance tests for bundle and report contract (v0.3).
-Locks: paths canonical, report.json not in report, inputs/artifacts/outputs separation,
+Locks: paths canonical, report.json not in report, inputs/artifacts/outputs separation
 hashes required, report_schema_version, expanded in inputs.
 """
 import hashlib
@@ -23,7 +23,7 @@ def test_bundle_self_contained(tmp_path):
     in_csv.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
     out_dir = tmp_path / "bundle1"
     out_dir.mkdir()
-    ret = main(["run", str(tmp_path / "x.sas"), "--out", str(out_dir), "--tables", f"in={in_csv}"])
+    ret = main(["run", str(tmp_path / "x.sas"), "--out", str(out_dir), "--tables", f"in={in_csv}", "--legacy-sas"])
     assert ret == 0
     moved = tmp_path / "bundle2"
     shutil.copytree(out_dir, moved)
@@ -38,7 +38,7 @@ def test_report_paths_canonical(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report_path = out_dir / "report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     bundle_root = out_dir.resolve()
@@ -62,7 +62,7 @@ def test_report_json_not_in_report(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     for inp in report.get("inputs", []):
         assert not (inp.get("path") or "").endswith("report.json")
@@ -79,7 +79,7 @@ def test_inputs_artifacts_outputs_separation(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     input_paths = {i.get("path") for i in report.get("inputs", []) if i.get("path")}
     artifact_paths = {a.get("path") for a in report.get("artifacts", []) if a.get("path")}
@@ -102,7 +102,7 @@ def test_outputs_have_hashes_and_table_facts(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     bundle_root = out_dir.resolve()
     for out in report.get("outputs", []):
@@ -124,7 +124,7 @@ def test_hashes_required(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     for inp in report.get("inputs", []):
         assert inp.get("sha256"), f"input must have sha256: {inp}"
@@ -141,7 +141,7 @@ def test_report_schema_version_and_expanded_in_inputs(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     assert report.get("report_schema_version"), "report must have report_schema_version"
     expanded_inputs = [i for i in report.get("inputs", []) if i.get("role") == "expanded"]
@@ -159,7 +159,7 @@ def test_runtime_has_no_outputs_array(tmp_path):
     in_csv = tmp_path / "in.csv"
     in_csv.write_text("a,b\n1,2\n", encoding="utf-8")
     out_dir = tmp_path / "out"
-    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+    run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     runtime = report.get("runtime") or {}
     assert "outputs" not in runtime, "runtime must not have outputs array"
@@ -175,7 +175,7 @@ def test_source_input_hash_matches_bundle_bytes(tmp_path):
     script_path.write_bytes(crlf_bytes)
     out_dir = tmp_path / "out"
 
-    ret = main(["check", str(script_path), "--out", str(out_dir), "--tables", "in"])
+    ret = main(["check", str(script_path), "--out", str(out_dir), "--tables", "in", "--legacy-sas"])
     assert ret == 0
 
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))

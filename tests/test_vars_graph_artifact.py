@@ -39,7 +39,7 @@ def test_vars_graph_basic(tmp_path: Path) -> None:
         ]
     )
     out_dir = tmp_path / "out"
-    run_script(script, "test.sans", {}, out_dir)
+    run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
 
     graph = _vars_graph(out_dir)
     nodes = graph.get("nodes", [])
@@ -182,8 +182,8 @@ def test_vars_graph_ignores_loc(tmp_path: Path) -> None:
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    run_script(script_a, "a.sans", {}, out1)
-    run_script(script_b, "b.sans", {}, out2)
+    run_script(script_a, "a.sans", {}, out1, legacy_sas=True)
+    run_script(script_b, "b.sans", {}, out2, legacy_sas=True)
 
     assert (out1 / "artifacts" / "vars.graph.json").read_bytes() == (
         out2 / "artifacts" / "vars.graph.json"
@@ -200,7 +200,7 @@ def test_vars_graph_unknown_schema_skips_pass_through(tmp_path: Path, caplog) ->
 
     out_dir = tmp_path / "out"
     with caplog.at_level(logging.WARNING):
-        run_script(script, "s.sas", {"in": str(in_csv)}, out_dir)
+        run_script(script, "s.sas", {"in": str(in_csv)}, out_dir, legacy_sas=True)
 
     graph = _vars_graph(out_dir)
     edges = {(e["src"], e["dst"]) for e in graph.get("edges", [])}
@@ -223,7 +223,7 @@ def test_filter_pass_through_edges_explicit(tmp_path: Path) -> None:
         ]
     )
     out_dir = tmp_path / "out"
-    run_script(script, "test.sans", {}, out_dir)
+    run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
 
     graph = _vars_graph(out_dir)
     edges = {(e["src"], e["dst"]) for e in graph.get("edges", [])}
@@ -246,7 +246,7 @@ def test_filter_pass_through_edges_after_select_infers_schema(tmp_path: Path) ->
         ]
     )
     out_dir = tmp_path / "out"
-    run_script(script, "test.sans", {}, out_dir)
+    run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
 
     graph = _vars_graph(out_dir)
     edges = {(e["src"], e["dst"]) for e in graph.get("edges", [])}
@@ -272,8 +272,8 @@ def test_filter_predicate_change_affects_effects_not_vars_graph(tmp_path: Path) 
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    run_script(script_a, "a.sans", {}, out1)
-    run_script(script_b, "b.sans", {}, out2)
+    run_script(script_a, "a.sans", {}, out1, legacy_sas=True)
+    run_script(script_b, "b.sans", {}, out2, legacy_sas=True)
 
     assert (out1 / "artifacts" / "vars.graph.json").read_bytes() == (
         out2 / "artifacts" / "vars.graph.json"
@@ -300,8 +300,8 @@ def test_sort_order_change_updates_effects(tmp_path: Path) -> None:
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    run_script(script_a, "a.sans", {}, out1)
-    run_script(script_b, "b.sans", {}, out2)
+    run_script(script_a, "a.sans", {}, out1, legacy_sas=True)
+    run_script(script_b, "b.sans", {}, out2, legacy_sas=True)
 
     assert (out1 / "artifacts" / "table.effects.json").read_bytes() != (
         out2 / "artifacts" / "table.effects.json"
@@ -325,7 +325,7 @@ def test_vars_graph_chain_explicit(tmp_path: Path) -> None:
         ]
     )
     out_dir = tmp_path / "out"
-    run_script(script, "test.sans", {}, out_dir)
+    run_script(script, "test.sans", {}, out_dir, legacy_sas=True)
 
     graph = _vars_graph(out_dir)
     edges = {(e["src"], e["dst"]) for e in graph.get("edges", [])}

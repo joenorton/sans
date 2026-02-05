@@ -39,8 +39,8 @@ def test_literal_change_keeps_transform_class_id(tmp_path: Path) -> None:
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-    run_script(script_a, "s1.sas", {"in": str(in_csv)}, out1)
-    run_script(script_b, "s2.sas", {"in": str(in_csv)}, out2)
+    run_script(script_a, "s1.sas", {"in": str(in_csv)}, out1, legacy_sas=True)
+    run_script(script_b, "s2.sas", {"in": str(in_csv)}, out2, legacy_sas=True)
 
     plan_a = _load_plan(out1)
     plan_b = _load_plan(out2)

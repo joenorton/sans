@@ -45,7 +45,7 @@ def test_proc_format_put_mapping(tmp_path: Path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     out_csv = tmp_path / "outputs" / "out.csv"
@@ -78,7 +78,7 @@ def test_proc_format_unknown_format_fails(tmp_path: Path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_FORMAT_UNDEFINED"
@@ -110,7 +110,7 @@ def test_input_best_informat_parses_numeric(tmp_path: Path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     out_csv = tmp_path / "outputs" / "out.csv"
@@ -142,7 +142,7 @@ def test_input_unsupported_informat_errors(tmp_path: Path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "failed"
     assert report["primary_error"]["code"] == "SANS_RUNTIME_INFORMAT_UNSUPPORTED"
@@ -176,7 +176,7 @@ def test_proc_summary_mean(tmp_path: Path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     out_csv = tmp_path / "outputs" / "out.csv"
@@ -215,7 +215,7 @@ def test_proc_sort_nodupkey_first_wins(tmp_path: Path):
         bindings={"in": str(in_csv)},
         out_dir=tmp_path,
         strict=True,
-    )
+    legacy_sas=True)
 
     assert report["status"] == "ok"
     out_csv = tmp_path / "outputs" / "out.csv"
@@ -237,5 +237,5 @@ def test_proc_format_rejects_unsupported_statement():
         ]
     )
     with pytest.raises(UnknownBlockStep) as exc_info:
-        check_script(script, "test.sas")
+        check_script(script, "test.sas", legacy_sas=True)
     assert exc_info.value.code == "SANS_PARSE_FORMAT_UNSUPPORTED_STATEMENT"

@@ -25,7 +25,7 @@ def test_hello_verify(tmp_path):
     out_dir = tmp_path / "out"
     
     # Run
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}", "--legacy-sas"])
     assert ret == 0
     
     report_path = out_dir / "report.json"
@@ -124,13 +124,13 @@ def test_run_writes_expanded_sans_and_stable(tmp_path):
     out_dir_1 = tmp_path / "out1"
     out_dir_2 = tmp_path / "out2"
 
-    ret1 = main(["run", str(script_path), "--out", str(out_dir_1), "--tables", f"input={input_path}"])
+    ret1 = main(["run", str(script_path), "--out", str(out_dir_1), "--tables", f"input={input_path}", "--legacy-sas"])
     assert ret1 == 0
     expanded_path_1 = out_dir_1 / "inputs" / "source" / "expanded.sans"
     assert expanded_path_1.exists(), "run must write expanded.sans to inputs/source/"
     content_1 = expanded_path_1.read_text(encoding="utf-8")
 
-    ret2 = main(["run", str(script_path), "--out", str(out_dir_2), "--tables", f"input={input_path}"])
+    ret2 = main(["run", str(script_path), "--out", str(out_dir_2), "--tables", f"input={input_path}", "--legacy-sas"])
     assert ret2 == 0
     expanded_path_2 = out_dir_2 / "inputs" / "source" / "expanded.sans"
     assert expanded_path_2.exists()
@@ -157,7 +157,7 @@ def test_verify_whitespace_invariance(tmp_path):
     input_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
     out_dir = tmp_path / "out"
 
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}", "--legacy-sas"])
     assert ret == 0
 
     report_path = out_dir / "report.json"
@@ -184,7 +184,7 @@ def test_verify_path_normalization_invariance(tmp_path):
     input_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
     out_dir = tmp_path / "out"
 
-    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}"])
+    ret = main(["run", str(script_path), "--out", str(out_dir), "--tables", f"input={input_path}", "--legacy-sas"])
     assert ret == 0
 
     report_path = out_dir / "report.json"
