@@ -29,6 +29,8 @@ from .ast import (
 from .errors import SansScriptError
 
 
+IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+
 def normalize_decimal_string(s: str) -> str:
     """Canonicalize decimal literal string for IR storage. Deterministic; no exponent."""
     s = s.strip()
@@ -204,7 +206,7 @@ class SansScriptParser:
         s = line.stripped
 
         # 1) parse leading: datasource <name> = <rest>
-        m = re.match(r"^datasource\s+([a-zA-Z_]\w*)\s*=\s*(.+)$", s, re.IGNORECASE)
+        m = re.match(rf"^datasource\s+({IDENT_RE})\s*=\s*(.*)$", s, re.IGNORECASE)
         if not m:
             raise SansScriptError(
                 code="E_PARSE",
@@ -215,6 +217,18 @@ class SansScriptParser:
 
         name = m.group(1).lower()
         rhs = m.group(2).strip()
+        rhs_line = line
+        if not rhs:
+            next_line = self._next_content_line()
+            if not next_line:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message="Malformed datasource declaration.",
+                    line=line.number,
+                    hint='Use: datasource name = csv("path/to/file.csv"[, columns(a, b)])  OR  datasource name = inline_csv do ... end',
+                )
+            rhs_line = next_line
+            rhs = rhs_line.stripped
 
         # ------------------------------------------------------------------
         # csv("path"[, columns(...)])
@@ -227,7 +241,7 @@ class SansScriptParser:
         if m_csv:
             path = m_csv.group(1)
             columns_str = m_csv.group(2)
-            columns = self._parse_columns(columns_str, line.number) if columns_str else []
+            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else []
             return DatasourceDeclaration(
                 name=name,
                 kind="csv",
@@ -235,7 +249,7 @@ class SansScriptParser:
                 columns=columns,
                 inline_text=None,
                 inline_sha256=None,
-                span=SourceSpan(line.number, line.number),
+                span=SourceSpan(line.number, rhs_line.number),
             )
 
         # ------------------------------------------------------------------
@@ -260,7 +274,7 @@ class SansScriptParser:
         )
         if m_inline:
             columns_str = m_inline.group(1)
-            columns = self._parse_columns(columns_str, line.number) if columns_str else []
+            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else []
 
             # read block lines until `end`
             body_lines: list[str] = []
@@ -305,7 +319,7 @@ class SansScriptParser:
 
     def _parse_let_binding(self, line: _Line) -> LetBinding:
         # let name = <scalar-expr> (single scalar only; for multiple literals use const { })
-        match = re.match(r"let\s+([a-zA-Z_]\w*)\s*=\s*(.+)", line.stripped, re.IGNORECASE)
+        match = re.match(rf"let\s+({IDENT_RE})\s*=\s*(.+)", line.stripped, re.IGNORECASE)
         if not match:
             raise SansScriptError(
                 code="E_PARSE",
@@ -352,7 +366,7 @@ class SansScriptParser:
                     )
                 name_part, _, value_part = part.partition("=")
                 name = name_part.strip().lower()
-                if not re.match(r"[a-zA-Z_]\w*", name):
+                if not re.match(rf"{IDENT_RE}", name):
                     raise SansScriptError(code="E_PARSE", message=f"Invalid const name: '{name}'", line=line.number)
                 value_part = value_part.strip()
                 literal = self._parse_const_literal(value_part, line.number)
@@ -394,7 +408,7 @@ class SansScriptParser:
 
     def _parse_table_binding(self, line: _Line) -> TableBinding:
         # table name = <table-expr>
-        match = re.match(r"table\s+([a-zA-Z_]\w*)\s*=\s*(.+)", line.stripped, re.IGNORECASE)
+        match = re.match(rf"table\s+({IDENT_RE})\s*=\s*(.*)", line.stripped, re.IGNORECASE)
         if not match:
             raise SansScriptError(
                 code="E_PARSE",
@@ -404,16 +418,27 @@ class SansScriptParser:
             )
         name = match.group(1).lower()
         rhs_start = match.group(2).strip()
+        rhs_line = line
+        if not rhs_start:
+            rhs_line = self._next_content_line()
+            if not rhs_line:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message="Malformed table binding.",
+                    line=line.number,
+                    hint="Use: table name = table_expression",
+                )
+            rhs_start = rhs_line.stripped
         
         # We need to handle the case where <table-expr> might involve a block (do...end)
-        expr = self._parse_table_expr(line, rhs_override=rhs_start)
-        return TableBinding(name=name, expr=expr, span=expr.span)
+        expr = self._parse_table_expr(rhs_line, rhs_override=rhs_start)
+        return TableBinding(name=name, expr=expr, span=SourceSpan(line.number, expr.span.end))
 
     def _parse_save_stmt(self, line: _Line) -> SaveStmt:
         # save <table> to "<path>" [as "<name>"]
         s = line.stripped
         m = re.match(
-            r"save\s+([a-zA-Z_]\w*)\s+to\s+\"([^\"]*)\"(?:\s+as\s+\"([^\"]*)\")?\s*$",
+            rf"save\s+({IDENT_RE})\s+to\s+\"([^\"]*)\"(?:\s+as\s+\"([^\"]*)\")?\s*$",
             s,
             re.IGNORECASE,
         )
@@ -478,7 +503,7 @@ class SansScriptParser:
             primary, remainder, end_line = self._parse_builder("summary", source, remainder, line)
         else:
             # Table name
-            name_match = re.match(r"([a-zA-Z_]\w*)(.*)", text)
+            name_match = re.match(rf"({IDENT_RE})(.*)", text)
             if not name_match:
                 raise SansScriptError(
                     code="E_PARSE",
@@ -648,7 +673,7 @@ class SansScriptParser:
                 else:
                     break
 
-            match = re.match(r"\.([a-zA-Z_]\w*)\(([^)]*)\)(.*)", curr_rem)
+            match = re.match(rf"\.({IDENT_RE})\(([^)]*)\)(.*)", curr_rem)
             if not match:
                 break
             method = match.group(1).lower()
@@ -668,7 +693,7 @@ class SansScriptParser:
                 elif method == "var":
                     config["var"] = self._parse_columns(args_str, curr_line)
                 elif method == "stats":
-                    config["stats"] = self._parse_columns(args_str, curr_line)
+                    config["stats"] = self._parse_columns(args_str, curr_line, lower=True)
                 else:
                     raise SansScriptError(code="E_PARSE", message=f"Unknown aggregate builder method: {method}", line=curr_line)
         
@@ -785,13 +810,13 @@ class SansScriptParser:
                 allow_overwrite = True
                 part = part[7:].strip()
             
-            match = re.match(r"([a-zA-Z_]\w*)\s*=\s*(.+)", part)
+            match = re.match(rf"({IDENT_RE})\s*=\s*(.+)", part)
             if not match:
                 raise SansScriptError(code="E_PARSE", message=f"Malformed derive assignment: {part}", line=line_no)
             
             assignments.append({
                 "type": "assign",
-                "target": match.group(1).lower(),
+                "target": match.group(1),
                 "expr": self._parse_expr(match.group(2).strip(), line_no),
                 "allow_overwrite": allow_overwrite
             })
@@ -806,7 +831,7 @@ class SansScriptParser:
             if "->" not in part:
                  raise SansScriptError(code="E_PARSE", message=f"Rename mapping must use '->': {part}", line=line_no)
             old, new = part.split("->")
-            mappings[old.strip().lower()] = new.strip().lower()
+            mappings[old.strip()] = new.strip()
         return mappings
 
     def _parse_cast_specs(self, text: str, line_no: int) -> List[Dict[str, Any]]:
@@ -824,7 +849,7 @@ class SansScriptParser:
                     line=line_no,
                 )
             main, rest = part.split("->", 1)
-            col = main.strip().lower()
+            col = main.strip()
             rest = rest.strip()
             # rest is "to [on_error=...] [trim=...]"
             to_end = rest.find(" on_error=")
@@ -895,7 +920,7 @@ class SansScriptParser:
         parts.append(curr)
         return [p.strip() for p in parts if p.strip()]
 
-    def _parse_columns(self, segment: str, line_no: int) -> List[str]:
+    def _parse_columns(self, segment: str, line_no: int, *, lower: bool = False) -> List[str]:
         cols = [part.strip().strip(",") for part in re.split(r"[\s,]+", segment) if part.strip()]
         if not cols:
             raise SansScriptError(
@@ -903,7 +928,9 @@ class SansScriptParser:
                 message="Column list cannot be empty.",
                 line=line_no,
             )
-        return [col.lower() for col in cols]
+        if lower:
+            return [col.lower() for col in cols]
+        return cols
 
     def _collect_block(self, header: _Line) -> tuple[List[_Line], int]:
         body: List[_Line] = []

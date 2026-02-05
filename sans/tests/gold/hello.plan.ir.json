@@ -28,15 +28,39 @@
       "kind": "op",
       "loc": {
         "file": "sans/tests/fixtures/hello.sans",
-        "line_start": 10,
-        "line_end": 10
+        "line_start": 9,
+        "line_end": 9
       },
-      "op": "compute",
+      "op": "identity",
       "inputs": [
         "__datasource__in"
       ],
       "outputs": [
         "__t2__"
+      ],
+      "params": {
+        "source": {
+          "kind": "datasource",
+          "name": "in"
+        }
+      },
+      "transform_id": "8077efe1f784c6c8091ec41551dae3893be3ccffcf55f249345bb9d099147a56",
+      "transform_class_id": "7b64ab7c59fe57c56cdc47e93cec97988087c3b711ec53e8641d573bc9677fd8",
+      "step_id": "f7e6411e20365f77102eb2ad52f3f4070e88bed4b63a96504f5941ef0da59456"
+    },
+    {
+      "kind": "op",
+      "loc": {
+        "file": "sans/tests/fixtures/hello.sans",
+        "line_start": 10,
+        "line_end": 10
+      },
+      "op": "compute",
+      "inputs": [
+        "__t2__"
+      ],
+      "outputs": [
+        "__t3__"
       ],
       "params": {
         "mode": "derive",
@@ -60,7 +84,7 @@
       },
       "transform_id": "abc699af5d6b9ca60ea5b4e55d54f30925333859904f1361d57fa06efe3ffa40",
       "transform_class_id": "346c201a3760646b2d1ffdffe728f079c27073dfe893b95f12080a6203f8911a",
-      "step_id": "38cdfb61a07a3c5f32e50b443d3edffd557ae84c0cf358b1a212c3924dac1da0"
+      "step_id": "4eb8aa65b003a6e42013f17e452b60ed503e38305329c22a3327ec7a3f3870b1"
     },
     {
       "kind": "op",
@@ -71,10 +95,10 @@
       },
       "op": "filter",
       "inputs": [
-        "__t2__"
+        "__t3__"
       ],
       "outputs": [
-        "__t3__"
+        "__t4__"
       ],
       "params": {
         "predicate": {
@@ -92,7 +116,7 @@
       },
       "transform_id": "b332ccef4c9e10f3a82dfd0e51f3e1f7338e17b73ecbb4006b41483b03798458",
       "transform_class_id": "4838c24ba0c8874f3edbcc80bc8f9707eefdd065a8b5ec1a410f438d7fb9f476",
-      "step_id": "d65c72b0a87f7a42746eec49deb1712cc59998ce8ecdcc6847d883446b1d172b"
+      "step_id": "8e757f1d1012bd3343fdaf9e85b303f9dd79be2b90eedfee3da61dea2f5f7a08"
     },
     {
       "kind": "op",
@@ -103,7 +127,7 @@
       },
       "op": "select",
       "inputs": [
-        "__t3__"
+        "__t4__"
       ],
       "outputs": [
         "t"
@@ -116,7 +140,7 @@
       },
       "transform_id": "c90ed63a589568ec1562a6cb58ad699cf7a5c0b7417fd0654f67951a0adb26c2",
       "transform_class_id": "565e4829c669349524cde1a8f763ee5c612fe33057318818e984cf625eb7218e",
-      "step_id": "9eb4430ce0d6c3c4380e73a8947a6900d70ef6b3d201e356ae7f3b6ac7291b96"
+      "step_id": "a35ccf24f3001015d255310bd7ef732589c1340399c032230fc5dfe335cdd033"
     },
     {
       "kind": "op",
@@ -130,7 +154,7 @@
         "t"
       ],
       "outputs": [
-        "__t4__"
+        "__t5__"
       ],
       "params": {
         "cols": [
@@ -140,7 +164,7 @@
       },
       "transform_id": "c90ed63a589568ec1562a6cb58ad699cf7a5c0b7417fd0654f67951a0adb26c2",
       "transform_class_id": "565e4829c669349524cde1a8f763ee5c612fe33057318818e984cf625eb7218e",
-      "step_id": "dd2737b664e5ee48a72b719e8f675b1a0fe19b7a361415a3d435a0f09e16d3dc"
+      "step_id": "d0bfd2b19471783e16a6b213dc5759965a2ee1ce89c82afc45b761a3c3164242"
     }
   ],
   "tables": [
@@ -156,10 +180,13 @@
     "__t3__": {
       "sorted_by": null
     },
+    "__t4__": {
+      "sorted_by": null
+    },
     "t": {
       "sorted_by": null
     },
-    "__t4__": {
+    "__t5__": {
       "sorted_by": null
     }
   },

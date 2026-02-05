@@ -1,0 +1,105 @@
+{
+  "report_schema_version": "0.3",
+  "status": "ok",
+  "exit_code_bucket": 0,
+  "primary_error": null,
+  "diagnostics": [],
+  "inputs": [
+    {
+      "role": "source",
+      "name": "demo_high.sans",
+      "path": "inputs/source/demo_high.sans",
+      "sha256": "6cdd8727d68050601e07611612194ef4436856a5da57a1caa8d4848f0aa525ec"
+    },
+    {
+      "role": "expanded",
+      "name": "expanded.sans",
+      "path": "inputs/source/expanded.sans",
+      "sha256": "8ee2b5955a150e469790513f3315b46e55fee92b9735ee206a2e2cdf460d77b7"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "plan.ir.json",
+      "path": "artifacts/plan.ir.json",
+      "sha256": "a75105fa0b8da0a4c9ed1f058e5201aa7b40ee4c4eedc673f4a3ab27a0147c19"
+    },
+    {
+      "name": "graph.json",
+      "path": "artifacts/graph.json",
+      "sha256": "1787def0c202efba3e7143cede5508e4a6165920dc071db18323848f320a2bc1"
+    },
+    {
+      "name": "vars.graph.json",
+      "path": "artifacts/vars.graph.json",
+      "sha256": "1cbfb40e04be7ee993632b4f732c22dd5709b1b919973bdc33dd893b95536608"
+    },
+    {
+      "name": "table.effects.json",
+      "path": "artifacts/table.effects.json",
+      "sha256": "292836b80bbfde4fdf27d226c33b3346f5432686bda2bb6700a6598bca7a65c9"
+    },
+    {
+      "name": "registry.candidate.json",
+      "path": "artifacts/registry.candidate.json",
+      "sha256": "c73f3bd492bf25b7b550b420ef961a89c8497f4f81cce34bec1f62e1e18414ae"
+    },
+    {
+      "name": "runtime.evidence.json",
+      "path": "artifacts/runtime.evidence.json",
+      "sha256": "c4e54d47c778a700bebbdb108bb1856cef7bba2fe432bab876a47376dcc29593"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "sorted_high",
+      "path": "outputs/sorted_high.csv",
+      "sha256": "c29e49ad515bcdf7d515e22dde7653e1ceaeddad34f9fb5a9b4fdbe9ea00aa95",
+      "rows": 8,
+      "columns": [
+        "USUBJID",
+        "VISITNUM",
+        "A1C",
+        "label"
+      ]
+    },
+    {
+      "name": "sorted_high",
+      "path": "outputs/sorted_high.csv",
+      "sha256": "c29e49ad515bcdf7d515e22dde7653e1ceaeddad34f9fb5a9b4fdbe9ea00aa95",
+      "rows": 8,
+      "columns": [
+        "USUBJID",
+        "VISITNUM",
+        "A1C",
+        "label"
+      ]
+    }
+  ],
+  "plan_path": "artifacts/plan.ir.json",
+  "engine": {
+    "name": "sans",
+    "version": "0.1.0"
+  },
+  "settings": {
+    "strict": true,
+    "allow_approx": false,
+    "tolerance": null,
+    "tables": [],
+    "datasources": [
+      "lb"
+    ]
+  },
+  "timing": {
+    "compile_ms": 3,
+    "validate_ms": 0,
+    "execute_ms": 4
+  },
+  "report_sha256": "bf3222d46066a3bb39abb9f27ef7d618d5c35c3574221a4b96044f9b657c8d58",
+  "runtime": {
+    "status": "ok",
+    "timing": {
+      "execute_ms": 4
+    }
+  }
+}

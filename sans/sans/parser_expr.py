@@ -7,17 +7,18 @@ from .expr import ExprNode, lit, col, binop, boolop, unop, call
 from ._loc import Loc # For error reporting, though for expr AST, Loc might be more granular.
 
 # --- Tokenization ---
+IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 TOKEN_PATTERNS = [
     (r"\s+", None), # Whitespace to ignore - MUST be first
     (r"\"[^\"]*\"|\'[^\']*\'", "STRING"), # String literals (double or single quotes) - Moved higher
-    (r"\b(first|last)\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # BY-group flags
-    (r"\$?[a-zA-Z_]\w*\.(?![a-zA-Z_])", "IDENTIFIER"), # Formats/informats like $sev. or best.
-    (r"\b[a-zA-Z_]\w*\.[a-zA-Z_]\w*\b", "IDENTIFIER"), # Qualified identifiers
+    (fr"\b(first|last)\.{IDENT_RE}\b", "IDENTIFIER"), # BY-group flags
+    (fr"\$?{IDENT_RE}\.(?![A-Za-z_])", "IDENTIFIER"), # Formats/informats like $sev. or best.
+    (fr"\b{IDENT_RE}\.{IDENT_RE}\b", "IDENTIFIER"), # Qualified identifiers
     (r"\b(and|or|not)\b", "KEYWORD_LOGICAL"),
     (r"\b(coalesce|if|put|input)\b", "KEYWORD_FUNCTION"), # Allowlisted functions
     (r"\b(ne|eq|lt|le|gt|ge)\b", "OPERATOR"), # SAS-style comparison keywords
     (r"\bnull\b|\.", "NULL"), # Null literal (handle both 'null' keyword and '.' for SAS)
-    (r"\b[a-zA-Z_]\w*\b", "IDENTIFIER"), # Column references / variable names
+    (fr"\b{IDENT_RE}\b", "IDENTIFIER"), # Column references / variable names
     (r"\d+(?:\.\d*)?", "NUMBER"), # Numeric literals (int or float)
     (r"==|!=|<=|>=|\^=|~=|=|<|>|\+|-|\*|\/", "OPERATOR"), # Multi-char operators first, then single-char
     (r"\(", "LPAREN"),

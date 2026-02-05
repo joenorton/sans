@@ -100,20 +100,31 @@ class SemanticValidator:
     def _validate_table_expr(self, expr: TableExpr) -> Optional[List[str]]:
         """Returns the list of column names produced by this expression if known."""
         if isinstance(expr, FromExpr):
-            if expr.source not in self.datasources:
-                raise SansScriptError(
-                    code="E_UNDECLARED_DATASOURCE",
-                    message=f"Datasource '{expr.source}' is not declared.",
-                    line=expr.span.start
-                )
-            # If datasource has explicit columns, use them as schema
-            if self.datasources[expr.source].columns:
-                return self.datasources[expr.source].columns
-            
-            # Default schema for demo purposes or unknown datasources
-            if expr.source == "in": # Special handling for demo.sans
-                return ["a", "b", "c"]
-            return None # Schema unknown for other external sources without declaration
+            if expr.source in self.tables:
+                expr.source_kind = "table"
+                return self.table_schemas.get(expr.source)
+            if expr.source in self.datasources:
+                expr.source_kind = "datasource"
+                # If datasource has explicit columns, use them as schema
+                if self.datasources[expr.source].columns:
+                    return self.datasources[expr.source].columns
+                
+                # Default schema for demo purposes or unknown datasources
+                if expr.source == "in": # Special handling for demo.sans
+                    return ["a", "b", "c"]
+                return None # Schema unknown for other external sources without declaration
+            known_tables = sorted(self.tables)
+            known_datasources = sorted(self.datasources.keys())
+            tables_hint = ", ".join(known_tables) if known_tables else "<none>"
+            ds_hint = ", ".join(known_datasources) if known_datasources else "<none>"
+            raise SansScriptError(
+                code="E_UNDECLARED_SOURCE",
+                message=(
+                    f"Source '{expr.source}' is not declared as a table or datasource. "
+                    f"Known tables: {tables_hint}. Known datasources: {ds_hint}."
+                ),
+                line=expr.span.start,
+            )
 
         elif isinstance(expr, TableNameExpr):
             if expr.name not in self.tables:
@@ -274,15 +285,18 @@ class SemanticValidator:
         etype = expr.get("type")
         if etype == "col":
             name = expr.get("name")
-            if name in self.kinds and self.kinds[name] == 'scalar':
-                self.used_scalars.add(name)
-            elif name in self.kinds and self.kinds[name] == 'table':
+            if not isinstance(name, str):
+                return
+            key = name.lower()
+            if key in self.kinds and self.kinds[key] == 'scalar':
+                self.used_scalars.add(key)
+            elif key in self.kinds and self.kinds[key] == 'table':
                  raise SansScriptError(
                     code="E_KIND_LOCK",
                     message=f"Table '{name}' cannot be used as a scalar.",
                     line=line
                 )
-            elif name in self.kinds and self.kinds[name] == 'datasource':
+            elif key in self.kinds and self.kinds[key] == 'datasource':
                  raise SansScriptError(
                     code="E_KIND_LOCK",
                     message=f"Datasource '{name}' cannot be used as a scalar or column.",

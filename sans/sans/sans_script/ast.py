@@ -54,6 +54,7 @@ class TableExpr:
 class FromExpr(TableExpr):
     source: str
     span: SourceSpan
+    source_kind: Optional[str] = None  # "table" | "datasource" (resolved in validation)
 
 
 @dataclass

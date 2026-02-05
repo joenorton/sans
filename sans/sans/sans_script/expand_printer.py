@@ -45,8 +45,15 @@ def _expr_to_string(node: Any) -> str:
     return "null"
 
 
-def _input_ref(inp: str) -> str:
-    """Canonical reference for expanded.sans: from(ds) for datasource, else table name."""
+def _input_ref(inp: str, params: Dict[str, Any] | None = None) -> str:
+    """Canonical reference for expanded.sans: from(source) when explicit, else table name."""
+    if params:
+        source = params.get("source")
+        if isinstance(source, dict):
+            kind = source.get("kind")
+            name = source.get("name")
+            if kind in ("table", "datasource") and isinstance(name, str) and name:
+                return f"from({name})"
     if is_ds_input(inp):
         return f"from({ds_name_from_input(inp)})"
     return inp
@@ -76,7 +83,7 @@ def _step_to_expanded(step: OpStep) -> List[str]:
     params = step.params or {}
     out = outputs[0] if outputs else None
     inp = inputs[0] if inputs else None
-    inp_ref = _input_ref(inp) if inp else ""
+    inp_ref = _input_ref(inp, params) if inp else ""
 
     if op == "datasource":
         name = params.get("name", "")

@@ -1,0 +1,9 @@
+# sans 0.1
+datasource lb = csv("lb.csv", columns(USUBJID, VISITNUM, LBDTC, LBTESTCD, LBORRES, LBSTRESN, LBSTRESU))
+table __t2__ = from(lb)
+table __t3__ = __t2__ filter((LBTESTCD = "HBA1C"))
+table __t4__ = __t3__ rename(LBSTRESN -> A1C)
+table __t5__ = __t4__ select USUBJID, VISITNUM, LBDTC, A1C
+table __t6__ = __t5__ derive(label = "LOW")
+table sorted_high = __t6__ select USUBJID, VISITNUM, A1C, label
+save sorted_high to "sorted_high.csv"

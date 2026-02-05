@@ -1,0 +1,145 @@
+{
+  "registry_version": "0.1",
+  "transforms": [
+    {
+      "transform_id": "43a1ed8797a1fe11c7c63ce896e41537538e1cdf1461c931585441e2613a2a82",
+      "kind": "datasource",
+      "spec": {
+        "op": "datasource",
+        "params": {
+          "columns": [
+            "USUBJID",
+            "VISITNUM",
+            "LBDTC",
+            "LBTESTCD",
+            "LBORRES",
+            "LBSTRESN",
+            "LBSTRESU"
+          ],
+          "kind": "csv",
+          "name": "lb",
+          "path": "lb.csv"
+        }
+      }
+    },
+    {
+      "transform_id": "fe25d69c13dce5671c86af62eda7810c69d786d3c9ca3d5b70413046de686234",
+      "kind": "identity",
+      "spec": {
+        "op": "identity",
+        "params": {
+          "source": {
+            "kind": "datasource",
+            "name": "lb"
+          }
+        }
+      }
+    },
+    {
+      "transform_id": "7bee27ff66f741a90565a4615166af3dd7b2fb3a2cc257ada0d142231363fd41",
+      "kind": "filter",
+      "spec": {
+        "op": "filter",
+        "params": {
+          "predicate": {
+            "left": {
+              "name": "LBTESTCD",
+              "type": "col"
+            },
+            "op": "=",
+            "right": {
+              "type": "lit",
+              "value": "HBA1C"
+            },
+            "type": "binop"
+          }
+        }
+      }
+    },
+    {
+      "transform_id": "14818f3451646299d6bcfc1111200c3f5dfe610bbe62e01fa1aa7d2a549426e5",
+      "kind": "rename",
+      "spec": {
+        "op": "rename",
+        "params": {
+          "mapping": [
+            {
+              "from": "LBSTRESN",
+              "to": "A1C"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "transform_id": "f221e7ba651497e4b33d372f948769c54b9b2b9d99a2b0f9c87880a72642e3a9",
+      "kind": "select",
+      "spec": {
+        "op": "select",
+        "params": {
+          "cols": [
+            "USUBJID",
+            "VISITNUM",
+            "LBDTC",
+            "A1C"
+          ]
+        }
+      }
+    },
+    {
+      "transform_id": "1296e8a6f545713327120baf647835174f864f46ffe0d8676240661a66e74112",
+      "kind": "compute",
+      "spec": {
+        "op": "compute",
+        "params": {
+          "assignments": [
+            {
+              "expr": {
+                "type": "lit",
+                "value": "HIGH"
+              },
+              "target": "label"
+            }
+          ],
+          "mode": "derive"
+        }
+      }
+    },
+    {
+      "transform_id": "7f3313988b91495614a5bb866b68bfe7dc0c9cdcc564f0555284b47d8063354c",
+      "kind": "select",
+      "spec": {
+        "op": "select",
+        "params": {
+          "cols": [
+            "USUBJID",
+            "VISITNUM",
+            "A1C",
+            "label"
+          ]
+        }
+      }
+    },
+    {
+      "transform_id": "834fb5742e488c87231f992ef4f39b91dbc4e52e2532e7d24a44e26ab4ccfd42",
+      "kind": "save",
+      "spec": {
+        "op": "save",
+        "params": {
+          "name": null,
+          "path": "sorted_high.csv"
+        }
+      }
+    }
+  ],
+  "index": {
+    "0": "43a1ed8797a1fe11c7c63ce896e41537538e1cdf1461c931585441e2613a2a82",
+    "1": "fe25d69c13dce5671c86af62eda7810c69d786d3c9ca3d5b70413046de686234",
+    "2": "7bee27ff66f741a90565a4615166af3dd7b2fb3a2cc257ada0d142231363fd41",
+    "3": "14818f3451646299d6bcfc1111200c3f5dfe610bbe62e01fa1aa7d2a549426e5",
+    "4": "f221e7ba651497e4b33d372f948769c54b9b2b9d99a2b0f9c87880a72642e3a9",
+    "5": "1296e8a6f545713327120baf647835174f864f46ffe0d8676240661a66e74112",
+    "6": "7f3313988b91495614a5bb866b68bfe7dc0c9cdcc564f0555284b47d8063354c",
+    "7": "834fb5742e488c87231f992ef4f39b91dbc4e52e2532e7d24a44e26ab4ccfd42"
+  }
+}

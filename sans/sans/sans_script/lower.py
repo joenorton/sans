@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Set, Tuple, Any, Dict, Optional
 
-from sans.ir import OpStep
+from sans.ir import OpStep, ds_input
 from sans._loc import Loc
 
 from .ast import (
@@ -65,6 +65,7 @@ class Lowerer:
         self.steps: List[OpStep] = []
         self.referenced: Set[str] = set()
         self.produced: Set[str] = set()
+        self.datasources: Set[str] = set()
         self.temp_count = 0
         self.const_bindings: Dict[str, Any] = {}
 
@@ -73,6 +74,7 @@ class Lowerer:
         return f"__t{self.temp_count}__"
 
     def lower(self, script: SansScript) -> Tuple[List[OpStep], Set[str]]:
+        self.datasources = set(script.datasources.keys())
         # Pre-pass: collect all const bindings for compile-time substitution into expressions
         for stmt in script.statements:
             if isinstance(stmt, ConstDecl):
@@ -168,38 +170,26 @@ class Lowerer:
         final_output = output if output else self.next_temp()
         
         if isinstance(expr, FromExpr):
-            # References the datasource, not a table produced by a step
-            # The datasource itself is implicitly available, but its data needs to be "loaded"
-            # So, the input to the next step will be the datasource's name.
-            # We don't produce an 'identity' OpStep here if it's just 'from(ds)'
-            self.referenced.add(f"__datasource__{expr.source}")
-            return f"__datasource__{expr.source}"
+            kind = expr.source_kind
+            if kind is None:
+                if expr.source in self.produced:
+                    kind = "table"
+                elif expr.source in self.datasources:
+                    kind = "datasource"
+                else:
+                    kind = "table"
+            input_name = ds_input(expr.source) if kind == "datasource" else expr.source
+            output_name = final_output if output else self.next_temp()
+            self.steps.append(OpStep(
+                op="identity",
+                inputs=[input_name],
+                outputs=[output_name],
+                params={"source": {"kind": kind, "name": expr.source}},
+                loc=self._loc(expr.span),
+            ))
+            return output_name
         
         if isinstance(expr, TableNameExpr):
-            # If a TableNameExpr refers to a datasource directly (e.g., 'table_name select ...')
-            # without an explicit 'from(table_name)', we treat it as implicitly loading the datasource.
-            if f"__datasource__{expr.name}" in self.produced or expr.name in self.referenced: # Check if it's a datasource or already referenced
-                 # This should eventually be a compiler error if the table is not explicitly defined
-                 # or referenced as datasource.
-                 # For now, if it starts with '__datasource__', it refers to the datasource.
-                 # If it's a TableNameExpr, it should refer to an already produced table,
-                 # or be resolved to a datasource.
-                 pass
-
-            if expr.name not in self.produced: # If not a produced table, assume it's a datasource
-                # This needs to be validated by the semantic validator.
-                # If it's a datasource, reference it here.
-                self.referenced.add(f"__datasource__{expr.name}")
-                if output:
-                    self.steps.append(OpStep(
-                        op="identity",
-                        inputs=[f"__datasource__{expr.name}"],
-                        outputs=[final_output],
-                        params={"source_name": expr.name},
-                        loc=self._loc(expr.span)
-                    ))
-                return final_output
-            # Normal table reference
             if output:
                 self.steps.append(OpStep(
                     op="identity",
@@ -207,6 +197,7 @@ class Lowerer:
                     outputs=[final_output],
                     loc=self._loc(expr.span)
                 ))
+                return final_output
             return expr.name
 
         if isinstance(expr, PipelineExpr):

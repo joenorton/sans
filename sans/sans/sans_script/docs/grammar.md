@@ -46,6 +46,7 @@
   ```
   table name = <table-expr>
   ```
+* whitespace/newlines around `=` are flexible; the table expression may start on the next non-empty line.
 
 ### save (explicit output)
 
@@ -95,6 +96,7 @@ rules:
 * referencing an undeclared datasource is a compile-time error.
 * datasource declarations are part of the deterministic IR inputs.
 * column projection/filtering does **not** occur at the datasource level unless schema is explicitly pinned.
+* whitespace/newlines around `=` are flexible; the datasource expression may start on the next non-empty line.
 
 ---
 
@@ -102,10 +104,11 @@ rules:
 
 ### sources
 
-* table sources are declared datasources:
+* table sources are declared datasources **or** previously bound tables:
 
   ```
   from(datasource_name)
+  from(table_name)
   ```
 
 ### pipeline blocks
