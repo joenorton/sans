@@ -109,7 +109,7 @@ def _infer_schema_two_pass(
     irdoc: IRDoc, initial_schema: Dict[str, List[str]]
 ) -> Dict[str, Optional[List[str]]]:
     schema: Dict[str, Optional[List[str]]] = {k: list(v) for k, v in (initial_schema or {}).items()}
-    supported_ops = {"compute", "filter", "select", "sort", "rename"}
+    supported_ops = {"identity", "compute", "filter", "select", "sort", "rename"}
 
     for step in irdoc.steps:
         if not isinstance(step, OpStep):
@@ -123,15 +123,17 @@ def _infer_schema_two_pass(
         input_schema = schema.get(input_table)
 
         if step.op == "compute":
+            mode = step.params.get("mode") or "derive"
             assignments = step.params.get("assignments") or step.params.get("assign") or []
             if input_schema is None:
                 schema[output_table] = None
             else:
                 output_schema = list(input_schema)
-                for assign in assignments:
-                    target = assign.get("target") or assign.get("col")
-                    if target and target not in output_schema:
-                        output_schema.append(target)
+                if mode != "update":
+                    for assign in assignments:
+                        target = assign.get("target") or assign.get("col")
+                        if target and target not in output_schema:
+                            output_schema.append(target)
                 schema[output_table] = output_schema
             continue
 
@@ -155,7 +157,7 @@ def _infer_schema_two_pass(
                 schema[output_table] = [col for col in input_schema if col not in drop]
             continue
 
-        if step.op in {"filter", "sort"}:
+        if step.op in {"filter", "sort", "identity"}:
             schema[output_table] = list(input_schema) if input_schema is not None else None
             continue
 
@@ -174,7 +176,7 @@ def _infer_schema_two_pass(
             continue
         if schema.get(input_table) is not None:
             continue
-        if step.op in {"filter", "sort"}:
+        if step.op in {"filter", "sort", "identity"}:
             schema[input_table] = list(output_schema)
             continue
         if step.op == "select":
@@ -190,7 +192,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
     initial_schema = initial_schema or {}
     schema_map = _infer_schema_two_pass(irdoc, initial_schema)
     nodes_by_id: Dict[str, Dict[str, Any]] = {}
-    edges: Set[Tuple[str, str]] = set()
+    edges: Set[Tuple[str, str, str]] = set()
     # Invariant: pass-through nodes never carry provenance. Only derived nodes do.
     # This keeps vars.graph stable across row/order-only changes (captured in table.effects).
 
@@ -235,9 +237,9 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
         origin = "pass_through" if table_id in produced_tables else "source"
         add_node(table_id, col, origin, None, None, None)
 
-    def add_edge(src_table: str, src_col: str, dst_table: str, dst_col: str) -> None:
+    def add_edge(src_table: str, src_col: str, dst_table: str, dst_col: str, kind: str = "flow") -> None:
         ensure_input_node(src_table, src_col)
-        edges.add((node_id(src_table, src_col), node_id(dst_table, dst_col)))
+        edges.add((node_id(src_table, src_col), node_id(dst_table, dst_col), kind))
 
     # Seed known source schemas
     for table_id, cols in initial_schema.items():
@@ -246,7 +248,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
         for col in cols:
             add_node(table_id, col, "source", None, None, None)
 
-    supported_ops = {"compute", "filter", "select", "sort", "rename"}
+    supported_ops = {"identity", "compute", "filter", "select", "sort", "rename"}
 
     for step in irdoc.steps:
         if not isinstance(step, OpStep):
@@ -275,7 +277,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
                 expr = assign.get("expr")
                 expr_sha256 = compute_expr_sha256(expr)
                 for ref in sorted(collect_expr_cols(expr)):
-                    add_edge(input_table, ref, output_table, target)
+                    add_edge(input_table, ref, output_table, target, kind="derivation")
                 add_node(
                     output_table,
                     target,
@@ -308,7 +310,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
                 if not dst:
                     continue
                 add_node(output_table, dst, "derived", step_id, transform_id, payload_sha256)
-                add_edge(input_table, src, output_table, dst)
+                add_edge(input_table, src, output_table, dst, kind="rename")
 
             if input_schema is None:
                 logger.warning(
@@ -321,7 +323,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
                         continue
                     dst_col = col
                     add_node(output_table, dst_col, "pass_through", None, None, None)
-                    add_edge(input_table, col, output_table, dst_col)
+                    add_edge(input_table, col, output_table, dst_col, kind="flow")
             continue
 
         if step.op == "select":
@@ -330,7 +332,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
             if keep:
                 for col in keep:
                     add_node(output_table, col, "pass_through", None, None, None)
-                    add_edge(input_table, col, output_table, col)
+                    add_edge(input_table, col, output_table, col, kind="flow")
             elif input_schema is None:
                 logger.warning(
                     "vars.graph: schema unknown for '%s' in select(drop); skipping pass-through edges",
@@ -341,10 +343,10 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
                     if col in drop:
                         continue
                     add_node(output_table, col, "pass_through", None, None, None)
-                    add_edge(input_table, col, output_table, col)
+                    add_edge(input_table, col, output_table, col, kind="flow")
             continue
 
-        if step.op in {"filter", "sort"}:
+        if step.op in {"filter", "sort", "identity"}:
             if input_schema is None:
                 logger.warning(
                     "vars.graph: schema unknown for '%s' in %s; skipping pass-through edges",
@@ -355,11 +357,11 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
                 for col in input_schema:
                     # Row/order effects do not belong in vars.graph; keep provenance null.
                     add_node(output_table, col, "pass_through", None, None, None)
-                    add_edge(input_table, col, output_table, col)
+                    add_edge(input_table, col, output_table, col, kind="flow")
             continue
 
     nodes = sorted(nodes_by_id.values(), key=lambda n: n["id"])
-    edge_list = [{"src": src, "dst": dst} for src, dst in sorted(edges)]
+    edge_list = [{"src": src, "dst": dst, "kind": kind} for src, dst, kind in sorted(edges)]
     return {"nodes": nodes, "edges": edge_list}
 
 

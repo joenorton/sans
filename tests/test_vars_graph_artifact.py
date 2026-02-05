@@ -46,12 +46,15 @@ def test_vars_graph_basic(tmp_path: Path) -> None:
     edges = graph.get("edges", [])
 
     assert nodes == sorted(nodes, key=lambda n: n["id"])
-    assert edges == sorted(edges, key=lambda e: (e["src"], e["dst"]))
+    assert edges == sorted(edges, key=lambda e: (e["src"], e["dst"], e["kind"]))
 
     expected_node_ids = {
         "v:__datasource__in.a",
         "v:__datasource__in.b",
         "v:__datasource__in.c",
+        "v:__t2__.a",
+        "v:__t2__.b",
+        "v:__t2__.c",
         "v:t1.a",
         "v:t1.b",
         "v:t1.c",
@@ -68,11 +71,14 @@ def test_vars_graph_basic(tmp_path: Path) -> None:
     assert {n["id"] for n in nodes} == expected_node_ids
 
     expected_edges = {
-        ("v:__datasource__in.a", "v:t1.a"),
-        ("v:__datasource__in.b", "v:t1.b"),
-        ("v:__datasource__in.c", "v:t1.c"),
-        ("v:__datasource__in.a", "v:t1.x"),
-        ("v:__datasource__in.b", "v:t1.x"),
+        ("v:__datasource__in.a", "v:__t2__.a"),
+        ("v:__datasource__in.b", "v:__t2__.b"),
+        ("v:__datasource__in.c", "v:__t2__.c"),
+        ("v:__t2__.a", "v:t1.a"),
+        ("v:__t2__.b", "v:t1.b"),
+        ("v:__t2__.c", "v:t1.c"),
+        ("v:__t2__.a", "v:t1.x"),
+        ("v:__t2__.b", "v:t1.x"),
         ("v:t1.a", "v:t2.a"),
         ("v:t1.b", "v:t2.b"),
         ("v:t1.c", "v:t2.c"),
@@ -222,7 +228,8 @@ def test_filter_pass_through_edges_explicit(tmp_path: Path) -> None:
     graph = _vars_graph(out_dir)
     edges = {(e["src"], e["dst"]) for e in graph.get("edges", [])}
     for col in ["a", "b"]:
-        assert (f"v:__datasource__in.{col}", f"v:out.{col}") in edges
+        assert (f"v:__datasource__in.{col}", f"v:__t2__.{col}") in edges
+        assert (f"v:__t2__.{col}", f"v:out.{col}") in edges
 
 
 def test_filter_pass_through_edges_after_select_infers_schema(tmp_path: Path) -> None:
@@ -244,7 +251,8 @@ def test_filter_pass_through_edges_after_select_infers_schema(tmp_path: Path) ->
     graph = _vars_graph(out_dir)
     edges = {(e["src"], e["dst"]) for e in graph.get("edges", [])}
     for col in ["a", "b"]:
-        assert (f"v:__datasource__in.{col}", f"v:filtered.{col}") in edges
+        assert (f"v:__datasource__in.{col}", f"v:__t2__.{col}") in edges
+        assert (f"v:__t2__.{col}", f"v:filtered.{col}") in edges
         assert (f"v:filtered.{col}", f"v:out.{col}") in edges
 
 

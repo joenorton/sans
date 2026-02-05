@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Union, Any
+from io import StringIO
+import csv
 from .ast import (
     SansScript, SansScriptStmt, LetBinding, ConstDecl, TableBinding, TableExpr,
     FromExpr, TableNameExpr, PipelineExpr, PostfixExpr, BuilderExpr,
@@ -100,19 +102,29 @@ class SemanticValidator:
     def _validate_table_expr(self, expr: TableExpr) -> Optional[List[str]]:
         """Returns the list of column names produced by this expression if known."""
         if isinstance(expr, FromExpr):
-            if expr.source in self.tables:
-                expr.source_kind = "table"
-                return self.table_schemas.get(expr.source)
             if expr.source in self.datasources:
                 expr.source_kind = "datasource"
                 # If datasource has explicit columns, use them as schema
                 if self.datasources[expr.source].columns:
                     return self.datasources[expr.source].columns
-                
+
+                # Infer inline_csv headers when available
+                ds = self.datasources[expr.source]
+                if ds.kind == "inline_csv" and ds.inline_text:
+                    reader = csv.reader(StringIO(ds.inline_text.strip()))
+                    try:
+                        headers = next(reader)
+                    except StopIteration:
+                        headers = []
+                    return headers
+
                 # Default schema for demo purposes or unknown datasources
                 if expr.source == "in": # Special handling for demo.sans
                     return ["a", "b", "c"]
                 return None # Schema unknown for other external sources without declaration
+            if expr.source in self.tables:
+                expr.source_kind = "table"
+                return self.table_schemas.get(expr.source)
             known_tables = sorted(self.tables)
             known_datasources = sorted(self.datasources.keys())
             tables_hint = ", ".join(known_tables) if known_tables else "<none>"

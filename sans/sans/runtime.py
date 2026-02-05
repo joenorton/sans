@@ -22,10 +22,10 @@ from .bundle import (
 from .sans_script import irdoc_to_expanded_sans
 from .sans_script.canon import compute_step_id, compute_transform_id
 from .xpt import load_xpt_with_warnings, dump_xpt, XptError
+from .evidence import collect_table_evidence, DEFAULT_EVIDENCE_CONFIG
+from .lineage import build_var_graph, write_vars_graph_json
 from . import __version__ as _engine_version
 import json
-import uuid
-from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 
@@ -45,6 +45,9 @@ class ExecutionResult:
     outputs: List[Dict[str, Any]]
     execute_ms: Optional[int]
     step_evidence: Optional[List[Dict[str, Any]]] = None
+    table_evidence: Optional[Dict[str, Any]] = None
+    datasource_schemas: Optional[Dict[str, List[str]]] = None
+    datasource_evidence: Optional[List[Dict[str, Any]]] = None
 
 
 class RuntimeFailure(Exception):
@@ -157,27 +160,54 @@ def _check_sorted(rows: List[Dict[str, Any]], by_cols: list[str]) -> bool:
     return True
 
 
-def _load_csv(path: Path) -> List[Dict[str, Any]]:
+def _load_csv_with_header(path: Path) -> tuple[List[Dict[str, Any]], List[str]]:
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f)
         try:
             headers = next(reader)
         except StopIteration:
-            # File is empty, return empty list
-            return []
-            
+            # File is empty
+            return [], []
+
         if not headers:
             # File has one empty line? 
-            return []
+            return [], []
 
         rows: List[Dict[str, Any]] = []
         for row in reader:
-            if not row: continue # Skip completely empty lines (no commas)
+            if not row:
+                continue  # Skip completely empty lines (no commas)
             row_dict: Dict[str, Any] = {}
             for i, col in enumerate(headers):
                 row_dict[col] = _parse_value(row[i]) if i < len(row) else None
             rows.append(row_dict)
-        return rows
+        return rows, headers
+
+
+def _load_csv(path: Path) -> List[Dict[str, Any]]:
+    rows, _headers = _load_csv_with_header(path)
+    return rows
+
+
+def _parse_inline_csv_text(inline_text: str) -> tuple[List[Dict[str, Any]], List[str]]:
+    from io import StringIO
+    buf = StringIO(inline_text.strip())
+    reader = csv.reader(buf)
+    try:
+        headers = next(reader)
+    except StopIteration:
+        return [], []
+    if not headers:
+        return [], []
+    rows_d: List[Dict[str, Any]] = []
+    for row in reader:
+        if not row:
+            continue
+        row_dict: Dict[str, Any] = {}
+        for i, col in enumerate(headers):
+            row_dict[col] = _parse_value(row[i]) if i < len(row) else None
+        rows_d.append(row_dict)
+    return rows_d, headers
 
 
 
@@ -1254,6 +1284,9 @@ def execute_plan(
     diagnostics: List[RuntimeDiagnostic] = []
     outputs: List[Dict[str, Any]] = []
     step_evidence: List[Dict[str, Any]] = []
+    table_evidence: Dict[str, Any] = {}
+    datasource_schemas: Dict[str, List[str]] = {}
+    datasource_evidence: List[Dict[str, Any]] = []
 
     try:
         tables: Dict[str, List[Dict[str, Any]]] = {}
@@ -1317,31 +1350,30 @@ def execute_plan(
                 ds_name = params.get("name") or out_name
                 if isinstance(ds_name, str) and ds_name.startswith("__datasource__"):
                     ds_name = ds_name.replace("__datasource__", "", 1)
+                pinned_cols = params.get("columns")
+                if isinstance(pinned_cols, list) and not pinned_cols:
+                    pinned_cols = None
                 data_dir = out_dir / INPUTS_DATA
                 data_dir.mkdir(parents=True, exist_ok=True)
                 materialized_path = data_dir / f"{ds_name}.csv"
                 if kind == "inline_csv":
                     inline_text = params.get("inline_text") or ""
-                    from io import StringIO
-                    buf = StringIO(inline_text.strip())
-                    reader = csv.reader(buf)
-                    try:
-                        headers = next(reader)
-                    except StopIteration:
-                        headers = []
-                    rows_d: List[Dict[str, Any]] = []
-                    for row in reader:
-                        if not row:
-                            continue
-                        row_dict = {}
-                        for i, col in enumerate(headers):
-                            row_dict[col] = _parse_value(row[i]) if i < len(row) else None
-                        rows_d.append(row_dict)
+                    rows_d, headers = _parse_inline_csv_text(inline_text)
+                    if pinned_cols is not None and headers != pinned_cols:
+                        raise RuntimeFailure(
+                            "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
+                            (
+                                f"Datasource '{ds_name}' columns do not match header. "
+                                f"Pinned: {pinned_cols}; Header: {headers}."
+                            ),
+                            _loc_to_dict(step.loc),
+                        )
                     tables[out_name] = rows_d
                     if rows_d:
                         _write_csv(materialized_path, rows_d)
                     else:
                         materialized_path.write_text("", encoding="utf-8")
+                    datasource_schemas[out_name] = list(headers)
                 else:
                     path_str = params.get("path") or ""
                     if not path_str:
@@ -1362,14 +1394,43 @@ def execute_plan(
                             rows_d, _ = load_xpt_with_warnings(path)
                         except XptError as exc:
                             raise RuntimeFailure(exc.code, exc.message)
+                        headers = list(rows_d[0].keys()) if rows_d else []
+                        if pinned_cols is not None and headers != pinned_cols:
+                            raise RuntimeFailure(
+                                "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
+                                (
+                                    f"Datasource '{ds_name}' columns do not match header. "
+                                    f"Pinned: {pinned_cols}; Header: {headers}."
+                                ),
+                                _loc_to_dict(step.loc),
+                            )
                         tables[out_name] = rows_d
                         materialized_path = data_dir / f"{ds_name}.xpt"
                         import shutil
                         shutil.copy2(path, materialized_path)
+                        datasource_schemas[out_name] = list(headers)
                     else:
-                        tables[out_name] = _load_csv(path)
+                        rows_d, headers = _load_csv_with_header(path)
+                        if pinned_cols is not None and headers != pinned_cols:
+                            raise RuntimeFailure(
+                                "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
+                                (
+                                    f"Datasource '{ds_name}' columns do not match header. "
+                                    f"Pinned: {pinned_cols}; Header: {headers}."
+                                ),
+                                _loc_to_dict(step.loc),
+                            )
+                        tables[out_name] = rows_d
                         import shutil
                         shutil.copy2(path, materialized_path)
+                        datasource_schemas[out_name] = list(headers)
+                datasource_evidence.append({
+                    "name": ds_name,
+                    "table_id": out_name,
+                    "kind": kind,
+                    "path": str(materialized_path),
+                    "columns": list(datasource_schemas.get(out_name, [])),
+                })
                 t_id = compute_transform_id(op, step.params)
                 step_evidence.append({
                     "step_index": step_idx,
@@ -1508,8 +1569,14 @@ def execute_plan(
                     columns = list(table_rows[0].keys()) if table_rows else []
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     _write_csv(out_path, table_rows)
+                    output_name = name or input_table
+                    table_evidence[output_name] = collect_table_evidence(
+                        table_rows,
+                        columns=columns,
+                        config=DEFAULT_EVIDENCE_CONFIG,
+                    )
                     outputs.append({
-                        "table": name or input_table,
+                        "table": output_name,
                         "path": str(out_path),
                         "rows": len(table_rows),
                         "columns": columns,
@@ -1561,6 +1628,18 @@ def execute_plan(
             for output in step.outputs:
                 tables[output] = output_rows
             
+            if op == "compute":
+                columns: List[str] = []
+                if output_rows:
+                    columns = list(output_rows[0].keys())
+                computed_evidence = collect_table_evidence(
+                    output_rows,
+                    columns=columns,
+                    config=DEFAULT_EVIDENCE_CONFIG,
+                )
+                for output in step.outputs:
+                    table_evidence[output] = computed_evidence
+
             t_id = compute_transform_id(op, step.params)
             step_evidence.append({
                 "step_index": step_idx,
@@ -1625,7 +1704,10 @@ def execute_plan(
             diagnostics=diagnostics,
             outputs=outputs,
             execute_ms=int((perf_counter() - start) * 1000),
-            step_evidence=step_evidence
+            step_evidence=step_evidence,
+            table_evidence=table_evidence,
+            datasource_schemas=datasource_schemas,
+            datasource_evidence=datasource_evidence,
         )
 
     except RuntimeFailure as err:
@@ -1635,7 +1717,10 @@ def execute_plan(
             diagnostics=diagnostics,
             outputs=outputs,
             execute_ms=int((perf_counter() - start) * 1000),
-            step_evidence=step_evidence
+            step_evidence=step_evidence,
+            table_evidence=table_evidence,
+            datasource_schemas=datasource_schemas,
+            datasource_evidence=datasource_evidence,
         )
 
 
@@ -1659,6 +1744,7 @@ def run_script(
         include_roots=include_roots,
         allow_absolute_includes=allow_absolute_includes,
         allow_include_escape=allow_include_escape,
+        emit_vars_graph=False,
     )
 
     # If compilation/validation refused, annotate runtime and exit.
@@ -1783,6 +1869,21 @@ def run_script(
             "columns": out["columns"],
         })
 
+    # Rebuild vars.graph.json with runtime-resolved datasource schemas (if available).
+    vars_graph_path = out_path / ARTIFACTS / "vars.graph.json"
+    initial_schema = {}
+    if result.datasource_schemas:
+        for table_id, cols in result.datasource_schemas.items():
+            initial_schema[table_id] = list(cols)
+    vars_graph = build_var_graph(irdoc, initial_schema=initial_schema)
+    write_vars_graph_json(vars_graph, vars_graph_path)
+    vars_graph_rel = bundle_relative_path(vars_graph_path, bundle_root)
+    for artifact in report.get("artifacts", []):
+        if artifact.get("name") == "vars.graph.json":
+            artifact["path"] = vars_graph_rel
+            artifact["sha256"] = compute_artifact_hash(vars_graph_path) or ""
+            break
+
     # 1. Emit registry.candidate.json under artifacts/
     registry = {
         "registry_version": "0.1",
@@ -1819,27 +1920,45 @@ def run_script(
 
     # 2. Emit runtime.evidence.json under artifacts/
     plan_ir_path = out_path / ARTIFACTS / "plan.ir.json"
+    tables_evidence = {}
+    if result.table_evidence:
+        for name in sorted(result.table_evidence.keys()):
+            tables_evidence[name] = result.table_evidence[name]
     evidence = {
         "sans_version": _engine_version,
-        "run_id": str(uuid.uuid4()),
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "plan_ir": {
             "path": bundle_relative_path(plan_ir_path, bundle_root),
             "sha256": compute_raw_hash(plan_ir_path) or "",
         },
         "bindings": {name: Path(p).name for name, p in bindings_in.items()},
         "inputs": [],
-        "outputs": [
-            {
-                "name": o["name"],
-                "path": o["path"],
-                "row_count": o["rows"],
-                "columns": o["columns"],
-            }
-            for o in report["outputs"]
-        ],
+        "outputs": [],
         "step_evidence": result.step_evidence or [],
+        "tables": tables_evidence,
     }
+    if result.datasource_evidence:
+        datasources = {}
+        for entry in sorted(result.datasource_evidence, key=lambda e: e.get("name", "")):
+            abs_path = Path(entry["path"]).resolve()
+            rel_path = bundle_relative_path(abs_path, bundle_root)
+            datasources[entry["name"]] = {
+                "kind": entry.get("kind"),
+                "path": rel_path,
+                "columns": entry.get("columns") or [],
+            }
+        evidence["datasources"] = datasources
+    seen_outputs: set[tuple[str, str]] = set()
+    for out in report["outputs"]:
+        key = (out["name"], out["path"])
+        if key in seen_outputs:
+            continue
+        seen_outputs.add(key)
+        evidence["outputs"].append({
+            "name": out["name"],
+            "path": out["path"],
+            "row_count": out["rows"],
+            "columns": out["columns"],
+        })
     for inp in report.get("inputs", []):
         if inp.get("role") == "datasource":
             evidence["inputs"].append({

@@ -171,13 +171,15 @@ execution-time witness data for integrity, not semantics.
 ### required top-level
 
 * `sans_version`: string
-* `run_id`: uuid string
-* `created_at`: iso timestamp (non-semantic)
 * `plan_ir`: `{path, sha256}` where `sha256` is raw bytes hash of `plan.ir.json`
 * `bindings`: mapping of logical input table name → path
 * `inputs`: list of input table evidence
 * `outputs`: list of output table evidence
 * `step_evidence`: list of per-step evidence objects (preferred) OR dict keyed by step_index (allowed only if you choose; but pick one and standardize—v0.1 recommends list)
+* `tables`: mapping of saved output table name -> table evidence (see below)
+
+note: runtime evidence MUST be deterministic and environment-blind; timestamps, UUIDs, and host-specific data MUST NOT be included.
+
 
 ### table evidence object
 
@@ -193,6 +195,33 @@ for outputs, also:
 
 * `row_count`: integer
 * `columns`: list of strings
+
+### tables: per-table runtime evidence (saved outputs only)
+
+`tables` is a mapping of **saved output table name** to a table evidence object:
+
+```
+tables[table_name] = {
+  "row_count": <int>,
+  "columns": {
+    <column_name>: {
+      "null_count": <int>,
+      "non_null_count": <int>,
+      "unique_count": <int | ">=N">,
+      "unique_count_capped": <bool>,
+      "constant_value": <scalar> (only when unique_count == 1 and null_count == 0),
+      "top_values": [{ "value": <scalar>, "count": <int> }, ...] (optional),
+      "type_hint": "string|int|decimal|bool|null|unknown" (optional)
+    }
+  },
+  "sample": { "strategy": "stride", "cap": <int>, "size": <int>, "step": <int> } (optional)
+}
+```
+
+* `tables` only includes outputs written via **save** (not implicit terminal tables).
+* all values are **runtime evidence** of what happened; **plan.ir literals are not treated as runtime value evidence**.
+* when datasets are large, evidence MAY be computed on a deterministic sample; if so, `sample` MUST be present.
+
 
 ### step evidence object (list form, recommended)
 

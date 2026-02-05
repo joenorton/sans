@@ -4,6 +4,8 @@ import json
 import hashlib
 from pathlib import Path
 from time import perf_counter
+from io import StringIO
+import csv
 
 from .frontend import detect_refusal, split_statements, segment_blocks, Block
 from .preprocessor import preprocess_text, MacroError
@@ -362,6 +364,7 @@ def emit_check_artifacts(
     include_roots: Optional[List[Path]] = None,
     allow_absolute_includes: bool = False,
     allow_include_escape: bool = False,
+    emit_vars_graph: bool = True,
 ) -> Tuple[IRDoc, Dict[str, Any]]:
     """
     Compile + validate, then emit plan and report artifacts.
@@ -458,10 +461,20 @@ def emit_check_artifacts(
 
     initial_schema: Dict[str, List[str]] = {}
     for name, ds in irdoc.datasources.items():
-        if ds.columns:
-            initial_schema[f"__datasource__{name}"] = list(ds.columns)
+        cols = ds.columns
+        if not cols and ds.kind == "inline_csv" and ds.inline_text:
+            reader = csv.reader(StringIO(ds.inline_text.strip()))
+            try:
+                cols = next(reader)
+            except StopIteration:
+                cols = []
+        if cols:
+            initial_schema[f"__datasource__{name}"] = list(cols)
     vars_graph_path = out_path / ARTIFACTS / "vars.graph.json"
-    vars_graph = build_var_graph(irdoc, initial_schema=initial_schema)
+    if emit_vars_graph:
+        vars_graph = build_var_graph(irdoc, initial_schema=initial_schema)
+    else:
+        vars_graph = {"nodes": [], "edges": []}
     write_vars_graph_json(vars_graph, vars_graph_path)
     effects_path = out_path / ARTIFACTS / "table.effects.json"
     effects = build_table_effects(irdoc)

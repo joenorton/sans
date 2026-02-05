@@ -241,7 +241,7 @@ class SansScriptParser:
         if m_csv:
             path = m_csv.group(1)
             columns_str = m_csv.group(2)
-            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else []
+            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else None
             return DatasourceDeclaration(
                 name=name,
                 kind="csv",
@@ -249,6 +249,109 @@ class SansScriptParser:
                 columns=columns,
                 inline_text=None,
                 inline_sha256=None,
+                span=SourceSpan(line.number, rhs_line.number),
+            )
+
+        # ------------------------------------------------------------------
+        # inline_csv("...")[, columns(...)]
+        # ------------------------------------------------------------------
+        if rhs.lower().startswith("inline_csv(") and rhs.endswith(")"):
+            inner = rhs[len("inline_csv("):-1].strip()
+            if not inner:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message="inline_csv() requires a string literal.",
+                    line=line.number,
+                )
+
+            literal = None
+            rest = ""
+            if inner.startswith('"""') or inner.startswith("'''"):
+                quote = inner[:3]
+                end_idx = inner.find(quote, 3)
+                if end_idx == -1:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message="Unterminated inline_csv string literal.",
+                        line=line.number,
+                    )
+                literal = inner[: end_idx + 3]
+                rest = inner[end_idx + 3 :].strip()
+            elif inner.startswith('"') or inner.startswith("'"):
+                quote = inner[0]
+                idx = 1
+                escaped = False
+                while idx < len(inner):
+                    ch = inner[idx]
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == quote:
+                        idx += 1
+                        break
+                    idx += 1
+                if idx > len(inner) or inner[idx - 1] != quote:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message="Unterminated inline_csv string literal.",
+                        line=line.number,
+                    )
+                literal = inner[:idx]
+                rest = inner[idx:].strip()
+            else:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message="inline_csv() requires a string literal.",
+                    line=line.number,
+                )
+
+            if rest:
+                if not rest.startswith(","):
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message="Malformed inline_csv() declaration.",
+                        line=line.number,
+                    )
+                rest = rest[1:].strip()
+                m_cols = re.match(r"^columns\s*\(([^)]*)\)\s*$", rest, re.IGNORECASE)
+                if not m_cols:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message="Malformed inline_csv() columns specification.",
+                        line=line.number,
+                    )
+                columns_str = m_cols.group(1)
+                columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else None
+            else:
+                columns = None
+
+            try:
+                import ast
+                inline_text = ast.literal_eval(literal)
+            except Exception:
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message="inline_csv() requires a valid string literal.",
+                    line=line.number,
+                )
+            if not isinstance(inline_text, str):
+                raise SansScriptError(
+                    code="E_PARSE",
+                    message="inline_csv() requires a string literal.",
+                    line=line.number,
+                )
+
+            normalized = _normalize_inline_csv(inline_text.splitlines())
+            sha = _sha256_text(normalized)
+
+            return DatasourceDeclaration(
+                name=name,
+                kind="inline_csv",
+                path=None,
+                columns=columns,
+                inline_text=normalized,
+                inline_sha256=sha,
                 span=SourceSpan(line.number, rhs_line.number),
             )
 
@@ -274,7 +377,7 @@ class SansScriptParser:
         )
         if m_inline:
             columns_str = m_inline.group(1)
-            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else []
+            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else None
 
             # read block lines until `end`
             body_lines: list[str] = []
