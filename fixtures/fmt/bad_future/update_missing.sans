@@ -1,0 +1,5 @@
+# sans 0.1
+datasource raw = csv("raw.csv", columns(a, b))
+table t = from(raw) do
+	update!(c = 1)
+end

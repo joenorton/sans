@@ -68,12 +68,79 @@ def normalize_decimal_string(s: str) -> str:
     return result
 
 
+def _split_inline_comment(line: str) -> tuple[str, str | None]:
+    """Split inline comments, respecting quoted strings."""
+    in_single = False
+    in_double = False
+    in_triple_single = False
+    in_triple_double = False
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if in_triple_single:
+            if line.startswith("'''", i):
+                in_triple_single = False
+                i += 3
+                continue
+            i += 1
+            continue
+        if in_triple_double:
+            if line.startswith('"""', i):
+                in_triple_double = False
+                i += 3
+                continue
+            i += 1
+            continue
+        if in_single:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_double = False
+            i += 1
+            continue
+
+        # Not inside a string
+        if line.startswith("'''", i):
+            in_triple_single = True
+            i += 3
+            continue
+        if line.startswith('"""', i):
+            in_triple_double = True
+            i += 3
+            continue
+        if ch == "'":
+            in_single = True
+            i += 1
+            continue
+        if ch == '"':
+            in_double = True
+            i += 1
+            continue
+        if ch == "#":
+            return line[:i], line[i:]
+        i += 1
+    return line, None
+
+
 class _Line:
     def __init__(self, text: str, number: int) -> None:
         self.text = text
-        self.stripped = text.strip()
         self.number = number
-    
+        self.code, self.comment = _split_inline_comment(text)
+        self.stripped = self.code.strip()
+
     @property
     def raw(self) -> str:
         return self.text
@@ -113,13 +180,14 @@ class SansScriptParser:
         non_empty_seen = 0
 
         for line in self._lines:
-            if not line.stripped:
+            raw = line.text.strip()
+            if not raw:
                 continue
 
             non_empty_seen += 1
 
-            if line.stripped.startswith(self.HEADER_MARKER):
-                version_part = line.stripped[len(self.HEADER_MARKER):].strip()
+            if raw.startswith(self.HEADER_MARKER):
+                version_part = raw[len(self.HEADER_MARKER):].strip()
                 if version_part == self.HEADER_VERSION:
                     header_line = line
                     break
@@ -447,14 +515,42 @@ class SansScriptParser:
         if not s.lower().startswith("const "):
             raise SansScriptError(code="E_PARSE", message="Malformed const declaration.", line=line.number)
         rest = s[6:].strip()
-        if not rest.startswith("{") or not rest.endswith("}"):
+        if not rest.startswith("{"):
             raise SansScriptError(
                 code="E_PARSE",
                 message="const must be followed by { name = literal, ... }.",
                 line=line.number,
                 hint="Allowed literal types: int, decimal, string, bool, null",
             )
-        inner = rest[1:-1].strip()
+        if rest.endswith("}"):
+            inner = rest[1:-1].strip()
+            end_line = line.number
+        else:
+            # Multiline const block: collect until closing brace.
+            parts = [rest[1:]]
+            end_line = line.number
+            while True:
+                next_line = self._next_content_line()
+                if not next_line:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message="Unterminated const block: missing '}'.",
+                        line=line.number,
+                    )
+                end_line = next_line.number
+                text = next_line.stripped
+                if "}" in text:
+                    before, _, after = text.partition("}")
+                    parts.append(before)
+                    if after.strip():
+                        raise SansScriptError(
+                            code="E_PARSE",
+                            message="Unexpected content after '}' in const block.",
+                            line=next_line.number,
+                        )
+                    break
+                parts.append(text)
+            inner = " ".join(parts).strip()
         bindings: Dict[str, Any] = {}
         if inner:
             for part in self._split_by_comma_respecting_parens(inner):
@@ -474,7 +570,7 @@ class SansScriptParser:
                 value_part = value_part.strip()
                 literal = self._parse_const_literal(value_part, line.number)
                 bindings[name] = literal
-        return ConstDecl(bindings=bindings, span=SourceSpan(line.number, line.number))
+        return ConstDecl(bindings=bindings, span=SourceSpan(line.number, end_line))
 
     def _parse_const_literal(self, text: str, line_no: int) -> Any:
         """Parse a single literal: int, decimal, quoted string, true/false, null. No exponent notation (1e-3)."""
@@ -1110,7 +1206,7 @@ class SansScriptParser:
         while idx < len(self._lines):
             line = self._lines[idx]
             stripped = line.stripped
-            if not stripped or stripped.startswith("#"):
+            if not stripped:
                 idx += 1
                 continue
             return line
@@ -1121,7 +1217,7 @@ class SansScriptParser:
             line = self._lines[self._idx]
             self._idx += 1
             stripped = line.stripped
-            if not stripped or stripped.startswith("#"):
+            if not stripped:
                 continue
             return line
         return None

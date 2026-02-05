@@ -1,0 +1,20 @@
+# sans 0.1
+datasource raw = csv("raw.csv")
+table t_rename = from(raw) do
+	rename(a -> b)
+end
+table t_derive = from(raw) do
+	derive(c = a + 1)
+end
+table t_update = from(raw) do
+	update!(a = a + 1)
+end
+table t_filter = from(raw) do
+	filter(a == 1)
+end
+table t_select = from(raw) do
+	select a, b
+end
+table t_drop = from(raw) do
+	drop b
+end

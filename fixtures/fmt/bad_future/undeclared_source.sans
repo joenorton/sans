@@ -1,0 +1,4 @@
+# sans 0.1
+table t = from(raw) do
+	select a
+end

@@ -62,6 +62,36 @@ Verify that a previously generated report matches the current state of files on 
 sans verify out/report.json
 ```
 
+### 5. Format
+Canonicalize `.sans` formatting (presentation only).
+```bash
+sans fmt example.sans
+sans fmt example.sans --check
+sans fmt example.sans --in-place
+```
+
+---
+
+## FMT Usage
+
+`sans fmt` is a pure formatter: it changes presentation only and guarantees parse‑equivalence and idempotence.
+
+**Modes**
+1. `canonical` (default): applies the canonical v0 style.
+2. `identity`: preserves bytes (except newline normalization to `\n`).
+
+**Flags**
+1. `--check`: exit non‑zero if formatting would change the file.
+2. `--in-place`: rewrite the file atomically (writes a temp file, then replaces).
+
+Examples:
+```bash
+sans fmt script.sans
+sans fmt script.sans --mode identity
+sans fmt script.sans --check
+sans fmt script.sans --in-place
+```
+
 ---
 
 ## Native `.sans` DSL

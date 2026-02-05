@@ -1,0 +1,9 @@
+# sans 0.1
+DATASOURCE   raw = 
+    CSV ( "raw.csv" )
+datasource RAW2=csv("raw2.csv" ,columns( id , value ))
+LET   threshold=10
+TABLE t=from(raw)
+Table u =
+from(raw2)
+from(raw)

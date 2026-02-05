@@ -8,6 +8,7 @@ from pathlib import Path
 from .compiler import emit_check_artifacts
 from .runtime import run_script
 from .validator_sdtm import validate_sdtm
+from .fmt import FMT_STYLE_ID, format_text, normalize_newlines
 from . import __version__ as _engine_version
 
 
@@ -119,6 +120,13 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_parser = subparsers.add_parser("verify", help="Verify a repro bundle")
     verify_parser.add_argument("bundle", help="Path to report.json or bundle directory")
+
+    fmt_parser = subparsers.add_parser("fmt", help="Format a .sans script")
+    fmt_parser.add_argument("script", help="Path to the script file or directory")
+    fmt_parser.add_argument("--mode", default="canonical", choices=["canonical", "identity"], help="Formatting mode")
+    fmt_parser.add_argument("--style", default=FMT_STYLE_ID, help="Formatting style version")
+    fmt_parser.add_argument("--check", action="store_true", help="Check if formatting is needed")
+    fmt_parser.add_argument("--in-place", action="store_true", dest="in_place", help="Rewrite the file in place")
 
     args = parser.parse_args(argv)
 
@@ -309,6 +317,70 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("ok: wrote validation.report.json")
         return int(report.get("exit_code_bucket", 50))
+
+    if args.command == "fmt":
+        script_path = Path(args.script)
+        if args.check and args.in_place:
+            print("failed: --check and --in-place are mutually exclusive")
+            return 1
+        if args.style != FMT_STYLE_ID:
+            print(f"failed: unsupported style '{args.style}' (expected '{FMT_STYLE_ID}')")
+            return 1
+
+        paths: list[Path]
+        if script_path.is_dir():
+            paths = sorted(script_path.rglob("*.sans"))
+            if not paths:
+                if args.check:
+                    print("ok: no .sans files found")
+                    return 0
+                if args.in_place:
+                    print("ok: no .sans files found")
+                    return 0
+                print("failed: no .sans files found (use --check or --in-place for directories)")
+                return 1
+            if not (args.check or args.in_place):
+                print("failed: directory formatting requires --check or --in-place")
+                return 1
+        else:
+            paths = [script_path]
+
+        any_changed = False
+        for path in paths:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"failed: {exc}")
+                return 1
+            try:
+                formatted = format_text(text, mode=args.mode, style=args.style, file_name=str(path))
+            except Exception as exc:
+                if hasattr(exc, "code") and hasattr(exc, "line"):
+                    print(f"failed: {exc.code} at {path}:{exc.line}")
+                else:
+                    print(f"failed: {exc}")
+                return 1
+
+            if args.check:
+                if formatted != normalize_newlines(text):
+                    print(f"needs format: {path}")
+                    any_changed = True
+                continue
+
+            if args.in_place:
+                if formatted != normalize_newlines(text):
+                    tmp_path = path.with_suffix(path.suffix + ".tmp")
+                    tmp_path.write_text(formatted, encoding="utf-8")
+                    tmp_path.replace(path)
+                    print(f"ok: wrote {path}")
+                continue
+
+            print(formatted, end="")
+            return 0
+
+        if args.check:
+            return 1 if any_changed else 0
+        return 0
 
     return 0
 

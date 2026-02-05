@@ -1,0 +1,5 @@
+# sans 0.1
+datasource raw = csv("raw.csv")
+table t = from(raw) do
+	select a, b
+end

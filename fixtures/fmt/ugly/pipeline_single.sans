@@ -1,0 +1,5 @@
+# sans 0.1
+DATASOURCE raw = csv("raw.csv")
+table t = from(raw) DO
+    SeLeCt  a ,b
+END

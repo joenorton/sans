@@ -1,0 +1,9 @@
+# sans 0.1
+datasource raw = csv("raw.csv")
+TABLE s = from(raw)  SeLeCt  a ,b
+table f = from(raw)  FILTER  a==1
+table sb = sort(from(raw)).BY( id ).NODUPKEY( TRUE )
+table ag = aggregate(from(raw)).CLASS( group ).VAR( x ,y ).STATS( mean ,sum )
+SAVE s TO "out.csv"
+save f to "out.csv" AS "filtered"
+ASSERT a  >   0

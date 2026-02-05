@@ -1,0 +1,9 @@
+# sans 0.1
+datasource raw = csv("raw.csv")
+table s = from(raw) select a, b
+table f = from(raw) filter a == 1
+table sb = sort(from(raw)).by(id).nodupkey(true)
+table ag = aggregate(from(raw)).class(group).var(x, y).stats(mean, sum)
+save s to "out.csv"
+save f to "out.csv" as "filtered"
+assert a > 0
