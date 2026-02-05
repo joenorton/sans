@@ -31,42 +31,66 @@ from .errors import SansScriptError
 
 IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 
+_DECIMAL_RE = re.compile(r"^[+-]?(?:\d+\.\d*|\d*\.\d+|\d+)$")
+
 def normalize_decimal_string(s: str) -> str:
     """Canonicalize decimal literal string for IR storage. Deterministic; no exponent."""
     s = s.strip()
-    # 4) Strip leading "+" if present
+    if not s:
+        raise ValueError("empty decimal literal")
+    if "e" in s.lower():
+        raise ValueError("exponent notation not supported")
+
+    # validate shape early (defensive; callers may not have regex-guarded)
+    if not _DECIMAL_RE.match(s):
+        raise ValueError(f"invalid decimal literal: {s!r}")
+
+    # strip leading '+'
     if s.startswith("+"):
         s = s[1:]
-    # 2) If starts with ".", prepend "0"; if "-.", make "-0."
+
+    # normalize leading dot forms
     if s.startswith("."):
         s = "0" + s
     elif s.startswith("-."):
-        s = "-0" + s[2:]
-    # 3) If ends with ".", drop the dot
+        s = "-0." + s[2:]
+
+    # drop trailing dot
     if s.endswith(".") and len(s) > 1:
         s = s[:-1]
-    # Split integer and fractional
+
+    # split
     if "." in s:
         int_part, frac_part = s.split(".", 1)
     else:
-        int_part = s
-        frac_part = ""
-    # Handle sign
+        int_part, frac_part = s, ""
+
+    # sign
+    sign = ""
     if int_part.startswith("-"):
         sign = "-"
         int_part = int_part[1:]
-    else:
-        sign = ""
-    # 5) Remove leading zeros in integer part; leave one if all zeros
+
+    # integer zeros
     int_part = int_part.lstrip("0") or "0"
-    # 6) Strip trailing zeros in fractional part; if empty, remove the dot
+
+    # fractional zeros
     frac_part = frac_part.rstrip("0")
+
     result = sign + int_part + ("." + frac_part if frac_part else "")
-    # 7) Normalize negative zero forms to "0"
+
+    # normalize any negative-zero representation to "0"
+    if result.startswith("-0") and (result == "-0" or result.startswith("-0.")):
+        # if "-0.xxx" with nonzero xxx, keep it; only collapse when effectively zero
+        if result == "-0" or result == "-0.":
+            return "0"
+        # "-0.xxx" where xxx exists; check if all zeros (shouldn't happen after rstrip, but be safe)
+        if set(result[3:]) <= {"0"}:
+            return "0"
+
     if result == "-0":
         return "0"
     return result
-
 
 def _split_inline_comment(line: str) -> tuple[str, str | None]:
     """Split inline comments, respecting quoted strings."""
