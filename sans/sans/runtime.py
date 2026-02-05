@@ -80,7 +80,7 @@ def _parse_value(raw: str) -> Any:
 
 def _compare_sas(left: Any, right: Any, op: str) -> bool:
     """Implements SAS-style comparison where None (missing) is smallest."""
-    if op == "=": return left == right
+    if op in {"=", "=="}: return left == right
     if op == "!=": return left != right
     
     # Missing value logic for <, <=, >, >=
@@ -425,7 +425,7 @@ def _eval_expr(node: Dict[str, Any], row: Dict[str, Any], formats: Optional[Dict
                 return left * right
             if op == "/":
                 return left / right
-        if op in {"=", "!=", "<", "<=", ">", ">="}:
+        if op in {"=", "==", "!=", "<", "<=", ">", ">="}:
             return _compare_sas(left, right, op)
         raise RuntimeFailure(
             "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",
@@ -494,7 +494,7 @@ def _eval_expr_assert(
         op = node.get("op")
         left = _eval_expr_assert(node.get("left"), tables, formats)
         right = _eval_expr_assert(node.get("right"), tables, formats)
-        if op in {"=", "!=", "<", "<=", ">", ">="}:
+        if op in {"=", "==", "!=", "<", "<=", ">", ">="}:
             return _compare_sas(left, right, op)
         if op in {"+", "-", "*", "/"}:
             if left is None or right is None:
@@ -568,7 +568,7 @@ def _eval_expr_sql(node: Dict[str, Any], row: Dict[str, Any], col_map: Dict[str,
                 return left * right
             if op == "/":
                 return left / right
-        if op in {"=", "!=", "<", "<=", ">", ">="}:
+        if op in {"=", "==", "!=", "<", "<=", ">", ">="}:
             return _compare_sas(left, right, op)
         raise RuntimeFailure(
             "SANS_RUNTIME_UNSUPPORTED_EXPR_NODE",

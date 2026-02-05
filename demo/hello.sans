@@ -7,9 +7,9 @@ datasource in = inline_csv do
 end
 
 table t = from(in) do
-  derive(base2 = a * 2)
-  filter(base2 > 10)
-  select a, base2
+	derive(base2 = a * 2)
+	filter(base2 > 10)
+	select a, base2
 end
 
 t select a, base2

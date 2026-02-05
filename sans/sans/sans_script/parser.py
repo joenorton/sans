@@ -1200,16 +1200,16 @@ class SansScriptParser:
     def _ensure_sans_expr_rules(self, text: str, line_no: int) -> None:
         if not self._file_name:
             return
-        # Basic check for == and !=
+        # Basic check for comparison operators (sans uses symbolic operators only)
         # This is a bit naive if they are inside strings, but tokenize should handle it.
         for token in tokenize(text, self._file_name):
             if token.type != "OPERATOR":
                 continue
             op = token.value.lower()
-            if op in {"=", "^=", "~=", "eq", "ne"}:
+            if op in {"=", "^=", "~=", "eq", "ne", "lt", "le", "gt", "ge"}:
                 raise SansScriptError(
                     code="E_BAD_EXPR",
-                    message="Use '==' for equality and '!=' for inequality in sans scripts.",
+                    message="Use symbolic comparison operators (==, !=, <, <=, >, >=) in sans scripts.",
                     line=line_no,
                 )
 

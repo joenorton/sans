@@ -1,6 +1,7 @@
 import pytest
 from sans.parser_expr import parse_expression_from_string
 from sans.expr import lit, col, binop, boolop, unop, call
+from sans.sans_script import SansScriptError, parse_sans_script
 
 def test_parse_literal_number():
     assert parse_expression_from_string("123") == lit(123)
@@ -41,17 +42,24 @@ def test_parse_binary_operators_precedence():
     )
 
 def test_parse_comparisons():
-    assert parse_expression_from_string("a = b") == binop("=", col("a"), col("b"))
-    assert parse_expression_from_string("a == b") == binop("=", col("a"), col("b"))
+    assert parse_expression_from_string("a == b") == binop("==", col("a"), col("b"))
+    assert parse_expression_from_string("a != b") == binop("!=", col("a"), col("b"))
     assert parse_expression_from_string("a > 10") == binop(">", col("a"), lit(10))
     assert parse_expression_from_string("x ~= y") == binop("!=", col("x"), col("y"))
-    assert parse_expression_from_string("x != y") == binop("!=", col("x"), col("y"))
     assert parse_expression_from_string("a ne b") == binop("!=", col("a"), col("b"))
-    assert parse_expression_from_string("a eq b") == binop("=", col("a"), col("b"))
+    assert parse_expression_from_string("a eq b") == binop("==", col("a"), col("b"))
     assert parse_expression_from_string("a lt b") == binop("<", col("a"), col("b"))
     assert parse_expression_from_string("a le b") == binop("<=", col("a"), col("b"))
     assert parse_expression_from_string("a gt b") == binop(">", col("a"), col("b"))
     assert parse_expression_from_string("a ge b") == binop(">=", col("a"), col("b"))
+    with pytest.raises(SansScriptError) as exc_info:
+        parse_sans_script(
+            "# sans 0.1\n"
+            "let x = a = b\n"
+            "x\n",
+            "bad_expr.sans",
+        )
+    assert exc_info.value.code == "E_BAD_EXPR"
 
 def test_parse_logical_operators_precedence():
     # if a > 1 and b < 2 works
