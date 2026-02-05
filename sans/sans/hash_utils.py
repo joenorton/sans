@@ -2,6 +2,8 @@ import hashlib
 import json
 import copy
 import csv
+import posixpath
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -131,61 +133,150 @@ def compute_artifact_hash(path: Path) -> Optional[str]:
         return None
 
 
-def _normalize_path(path_val: str, bundle_root: Path) -> str:
-    """Normalize path to posix, relative to bundle_root if under it; else posix (for determinism)."""
-    p = Path(path_val)
-    if not p.is_absolute():
-        p = (bundle_root / p).resolve()
+_DRIVE_RE = re.compile(r"^([A-Za-z]):(.*)$")
+_SELF_HASH_KEYS = {"report_sha256", "report_hash"}
+_PATH_LIST_KEYS = {"inputs", "artifacts", "outputs"}
+_PATH_KEY_NAMES = {"path", "plan_path", "file"}
+
+
+def _normalize_path_string(path_val: str) -> str:
+    """Normalize a path string independent of host OS."""
+    if path_val is None:
+        return ""
+    s = str(path_val)
+    if not s:
+        return s
+    s = s.replace("\\", "/")
+
+    drive = ""
+    rest = s
+    m = _DRIVE_RE.match(s)
+    if m:
+        drive = m.group(1).lower() + ":"
+        rest = m.group(2)
+
+    is_abs = False
+    if drive:
+        if rest.startswith("/"):
+            is_abs = True
     else:
-        p = p.resolve()
-    bundle = bundle_root.resolve()
-    try:
-        rel = p.relative_to(bundle)
-        return rel.as_posix()
-    except ValueError:
-        return p.as_posix()
+        if rest.startswith("/") or rest.startswith("//"):
+            is_abs = True
+
+    if rest == "":
+        norm_rest = ""
+    else:
+        norm_rest = posixpath.normpath(rest)
+        if norm_rest == ".":
+            norm_rest = ""
+
+    if drive:
+        if is_abs:
+            if norm_rest == "":
+                norm_rest = "/"
+            elif not norm_rest.startswith("/"):
+                norm_rest = "/" + norm_rest
+            return drive + norm_rest
+        return drive + norm_rest
+
+    if is_abs and norm_rest == "":
+        return "/"
+    if is_abs and not norm_rest.startswith("/"):
+        return "/" + norm_rest
+    return norm_rest
+
+
+def _split_norm_path(path_norm: str) -> tuple[str, list[str]]:
+    if not path_norm:
+        return "", []
+    m = _DRIVE_RE.match(path_norm)
+    if m:
+        drive = m.group(1).lower() + ":"
+        rest = m.group(2)
+        if rest.startswith("/"):
+            return drive + "/", [p for p in rest.lstrip("/").split("/") if p]
+        return drive, [p for p in rest.split("/") if p]
+
+    if path_norm.startswith("//"):
+        parts = [p for p in path_norm.lstrip("/").split("/") if p]
+        if len(parts) >= 2:
+            root = f"//{parts[0]}/{parts[1]}"
+            return root, parts[2:]
+        return f"//{'/'.join(parts)}", []
+
+    if path_norm.startswith("/"):
+        return "/", [p for p in path_norm.lstrip("/").split("/") if p]
+
+    return "", [p for p in path_norm.split("/") if p]
+
+
+def _relativize_if_under(path_norm: str, bundle_norm: str) -> Optional[str]:
+    path_root, path_parts = _split_norm_path(path_norm)
+    bundle_root, bundle_parts = _split_norm_path(bundle_norm)
+    if path_root != bundle_root:
+        return None
+    if path_parts[: len(bundle_parts)] != bundle_parts:
+        return None
+    rel_parts = path_parts[len(bundle_parts):]
+    if not rel_parts:
+        return "."
+    return "/".join(rel_parts)
+
+
+def _normalize_path_for_hash(path_val: str, bundle_root: Optional[Path]) -> str:
+    """Normalize path and make bundle-relative when possible."""
+    norm = _normalize_path_string(path_val)
+    if bundle_root is None or norm == "":
+        return norm
+    bundle_norm = _normalize_path_string(str(bundle_root))
+    rel = _relativize_if_under(norm, bundle_norm)
+    return rel if rel is not None else norm
+
+
+def _is_path_key(key: str) -> bool:
+    return key in _PATH_KEY_NAMES or key.endswith("_path")
+
+
+def _canonicalize_report_value(value: Any, bundle_root: Optional[Path]) -> Any:
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for key, item in value.items():
+            if key in _SELF_HASH_KEYS:
+                continue
+            if _is_path_key(key) and item is not None:
+                out[key] = _normalize_path_for_hash(str(item), bundle_root)
+            else:
+                out[key] = _canonicalize_report_value(item, bundle_root)
+        for list_key in _PATH_LIST_KEYS:
+            if list_key in out and isinstance(out[list_key], list):
+                out[list_key] = sorted(
+                    out[list_key],
+                    key=lambda x: (x.get("path") if isinstance(x, dict) else ""),
+                )
+        return out
+    if isinstance(value, list):
+        return [_canonicalize_report_value(v, bundle_root) for v in value]
+    return value
 
 
 def canonicalize_report(report: Dict[str, Any], bundle_root: Path) -> Dict[str, Any]:
     """
     Produce a deep copy of report suitable for deterministic hashing.
-    - Removes report_sha256.
-    - Normalizes all paths to bundle-relative forward slashes.
+    - Removes self-hash fields (report_sha256/report_hash).
+    - Normalizes all path-like fields (path, *_path, file) to bundle-relative forward slashes.
     - Canonically sorts inputs, artifacts, outputs by path for determinism.
-    - report.json is not listed in any array; no special-case null-ing.
     """
-    out = copy.deepcopy(report)
     bundle = Path(bundle_root).resolve()
+    return _canonicalize_report_value(copy.deepcopy(report), bundle)
 
-    out.pop("report_sha256", None)
 
-    if "plan_path" in out and out["plan_path"]:
-        out["plan_path"] = _normalize_path(str(out["plan_path"]), bundle)
-
-    for inp in out.get("inputs", []):
-        if inp.get("path"):
-            inp["path"] = _normalize_path(str(inp["path"]), bundle)
-
-    for art in out.get("artifacts", []):
-        if art.get("path"):
-            art["path"] = _normalize_path(str(art["path"]), bundle)
-
-    for o in out.get("outputs", []):
-        if o.get("path"):
-            o["path"] = _normalize_path(str(o["path"]), bundle)
-
-    if "inputs" in out:
-        out["inputs"] = sorted(out["inputs"], key=lambda x: (x.get("path") or ""))
-    if "artifacts" in out:
-        out["artifacts"] = sorted(out["artifacts"], key=lambda x: (x.get("path") or ""))
-    if "outputs" in out:
-        out["outputs"] = sorted(out["outputs"], key=lambda x: (x.get("path") or ""))
-
-    return out
+def canonicalize_report_for_hash(report: Dict[str, Any], bundle_root: Path) -> str:
+    """Canonical JSON payload used for report hashing."""
+    canonical = canonicalize_report(report, bundle_root)
+    return json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def compute_report_sha256(report: Dict[str, Any], bundle_root: Path) -> str:
     """SHA-256 of canonical report payload: json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False)."""
-    canonical = canonicalize_report(report, bundle_root)
-    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload = canonicalize_report_for_hash(report, bundle_root)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
