@@ -5,21 +5,21 @@ datasource in = csv("in.csv")
 const { high_label = "High risk", low_label = "Low risk" }
 
 table enriched = from(in) do
-  rename(b -> base_b)
-  filter(a + base_b >= 10)
-  derive do
-    update! c = a * base_b
-    risk = if(c > 50, "HIGH", "LOW")
-    level = if(risk == "HIGH", 2, 1)
-    risk_label = if(risk == "HIGH", high_label, if(risk == "LOW", low_label, ""))
-  end
-  select a, base_b, c, risk, level, risk_label
+	rename(b -> base_b)
+	filter(a + base_b >= 10)
+	derive do
+		update! c = a * base_b
+		risk = if(c > 50, "HIGH", "LOW")
+		level = if(risk == "HIGH", 2, 1)
+		risk_label = if(risk == "HIGH", high_label, if(risk == "LOW", low_label, ""))
+	end
+	select a, base_b, c, risk, level, risk_label
 end
 
 table enriched_s = sort(enriched).by(risk, level, c).nodupkey(true)
 
 table stats = aggregate(enriched_s)
-  .class(risk, level)
-  .var(c)
+.class(risk, level)
+.var(c)
 
-stats select risk, level, c_mean
+save stats to "sorted_high.csv"
