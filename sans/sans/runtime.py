@@ -2201,8 +2201,10 @@ def run_script(
     lock_generation_only = bool(emit_schema_lock_path)
 
     # Load schema lock before compile when provided, so compiler can apply it for type inference.
+    # When --schema-lock is not provided, autodiscover lock in script dir if any referenced datasource is untyped.
     schema_lock: Optional[Dict[str, Any]] = None
     resolved_schema_lock_path: Optional[Path] = None
+    schema_lock_auto_discovered: bool = False
     if schema_lock_path is not None:
         resolved_schema_lock_path = _resolve_schema_lock_path(
             Path(schema_lock_path), Path(file_name), Path.cwd()
@@ -2263,6 +2265,80 @@ def run_script(
             report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
             return report
         schema_lock_path = resolved_schema_lock_path
+    elif not lock_generation_only and Path(file_name).suffix.lower() == ".sans":
+        # Autodiscovery: if any referenced csv/inline_csv has no pins, look for lock in script dir.
+        from .compiler import compile_sans_script
+        try:
+            irdoc_pre = compile_sans_script(
+                text=text,
+                file_name=file_name,
+                tables=set(bindings.keys()) if bindings else None,
+                skip_type_validation=True,
+            )
+        except Exception:
+            # Parse/lower failed; let full compile run and report the real error.
+            irdoc_pre = None
+        if irdoc_pre is not None:
+            refs = _referenced_csv_datasource_names(irdoc_pre)
+            untyped_refs = [
+                n for n in refs
+                if irdoc_pre.datasources.get(n)
+                and irdoc_pre.datasources[n].kind in ("csv", "inline_csv")
+                and not irdoc_pre.datasources[n].column_types
+            ]
+            if untyped_refs:
+                script_dir = Path(file_name).resolve().parent
+                script_stem = Path(file_name).stem
+                candidates = [
+                    script_dir / f"{script_stem}.schema.lock.json",
+                    script_dir / "schema.lock.json",
+                ]
+                found: Optional[Path] = None
+                for p in candidates:
+                    if p.exists():
+                        found = p
+                        break
+                if found is not None:
+                    from .schema_lock import load_schema_lock
+                    schema_lock = load_schema_lock(found)
+                    resolved_schema_lock_path = found
+                    schema_lock_path = found
+                    schema_lock_auto_discovered = True
+                else:
+                    ensure_bundle_layout(out_path)
+                    paths_msg = ", ".join(str(p) for p in candidates)
+                    script_name = Path(file_name).name or "script.sans"
+                    report = {
+                        "report_schema_version": "0.3",
+                        "status": "refused",
+                        "exit_code_bucket": 50,
+                        "primary_error": {
+                            "code": "E_SCHEMA_REQUIRED",
+                            "message": (
+                                f"Schema lock required (untyped datasource(s): {', '.join(sorted(untyped_refs))}) but not found. "
+                                f"Looked for: {paths_msg}. Generate with: sans schema-lock {script_name}"
+                            ),
+                            "loc": None,
+                        },
+                        "diagnostics": [],
+                        "inputs": [],
+                        "artifacts": [],
+                        "outputs": [],
+                        "schema_lock_auto_discovered": True,
+                        "schema_lock_used_path": None,
+                        "schema_lock_sha256": None,
+                        "schema_lock_applied_datasources": [],
+                        "schema_lock_missing_datasources": [],
+                        "engine": {"name": "sans", "version": _engine_version},
+                        "settings": {"strict": strict, "allow_approx": False, "tolerance": None, "tables": []},
+                        "timing": {"compile_ms": None, "validate_ms": None, "execute_ms": None},
+                    }
+                    report["runtime"] = {"status": "refused", "timing": {"execute_ms": None}}
+                    report["diagnostics"] = [report["primary_error"]]
+                    report["report_sha256"] = compute_report_sha256(report, out_path)
+                    report_path = out_path / "report.json"
+                    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                    return report
 
     # Reuse loaded lock when lock_generation_only so we don't load twice
     schema_lock_for_emit = schema_lock if (schema_lock is not None and not lock_generation_only) else None
@@ -2283,6 +2359,9 @@ def run_script(
         schema_lock=schema_lock_for_emit,
         schema_lock_path_resolved=resolved_for_emit,
     )
+    # Autodiscovery visibility: report always has schema_lock_auto_discovered (true when lock was autodiscovered).
+    # When a lock was used (explicit or autodiscovered), compiler already set schema_lock_used_path and schema_lock_sha256.
+    report["schema_lock_auto_discovered"] = schema_lock_auto_discovered
 
     # If compilation/validation refused, annotate runtime and exit.
     if report.get("status") == "refused":

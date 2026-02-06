@@ -54,6 +54,17 @@ The lock is used to supply column names and types for any CSV/inline_csv datasou
 
 When you provide `--schema-lock`, the lock file is **copied into the output directory** at `{out_dir}/schema.lock.json` so the bundle is self-contained and auditable. The report includes **schema_lock_used_path** (the path you passed) and **schema_lock_copied_path** (`"schema.lock.json"`). The copy is byte-identical and **schema_lock_sha256** matches the canonical lock hash.
 
+### Autodiscovery (2-command workflow)
+
+If you **do not** pass `--schema-lock` and the script has at least one untyped CSV/inline_csv datasource, `sans run` looks for a lock file in the **script directory** only:
+
+1. `<script_stem>.schema.lock.json` (e.g. `demo_high.schema.lock.json` next to `demo_high.sans`)
+2. `schema.lock.json`
+
+If found, that lock is loaded and applied as if you had passed `--schema-lock`; the report has **schema_lock_auto_discovered** `true` and **schema_lock_used_path** set. The lock is still copied into `{out_dir}/schema.lock.json`. If no lock is found, the run refuses with **E_SCHEMA_REQUIRED** and the error message lists the paths that were searched. If all referenced datasources have typed columns (pinned), autodiscovery is skipped and **schema_lock_auto_discovered** is `false`.
+
+**Example:** `sans schema-lock demo_high.sans` writes `demo_high.schema.lock.json` next to the script; then `sans run demo_high.sans --out dh_out` (no `--schema-lock`) auto-uses that file and runs successfully.
+
 ## Behavior when enforcing a lock
 
 - **Extra columns in input**: Allowed. Columns in the CSV that are not in the lock are ignored for type enforcement (they remain in row data but are not required or type-checked by the lock).
@@ -109,6 +120,7 @@ If `--schema-lock` is given, `sans verify` checks that the lock file’s hash eq
 | **E_SCHEMA_MISSING_COL** | Input CSV is missing one or more columns required by the lock. |
 | **E_SCHEMA_LOCK_NOT_FOUND** | `--schema-lock` was supplied but the file was not found or could not be parsed at the resolved path (relative paths are resolved against the script directory). |
 | **E_SCHEMA_LOCK_MISSING_DS** | `--schema-lock` was supplied and read, but the lock does not contain an entry for one or more referenced untyped datasources. |
+| **E_SCHEMA_LOCK_INVALID** | A schema-lock entry (or pinned columns) contains an unknown or invalid column type (e.g. `unknown`). All ingress columns must have concrete types (int, decimal, string, bool, date, etc.). |
 | **E_CSV_COERCE** | A locked or typed column value could not be coerced to the expected type (see `coercion_diagnostics` in runtime.evidence.json). |
 | **SANS_LOCK_GEN_FILE_NOT_FOUND** | Lock-only generation: a referenced CSV file was not found at the resolved path. |
 

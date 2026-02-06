@@ -85,8 +85,9 @@
     "lock_only": {"type": "boolean", "description": "True when run was lock-only (no execution)"},
     "schema_lock_path": {"type": "string", "description": "Bundle-relative or absolute path to the emitted lock file"},
     "schema_lock_emit_path": {"type": "string", "description": "Absolute path where the lock file was written"},
-    "schema_lock_used_path": {"type": "string", "description": "When --schema-lock was provided: original path passed by user"},
-    "schema_lock_copied_path": {"type": "string", "description": "When --schema-lock was provided: bundle-relative path of lock copy in out_dir (e.g. schema.lock.json)"}
+    "schema_lock_used_path": {"type": "string", "description": "Resolved path to the schema lock file used (user-provided or autodiscovered)"},
+    "schema_lock_copied_path": {"type": "string", "description": "When a schema lock was used: bundle-relative path of lock copy in out_dir (e.g. schema.lock.json)"},
+    "schema_lock_auto_discovered": {"type": "boolean", "description": "True when sans run used a lock found next to the script (no --schema-lock passed)"}
   },
   "definitions": {
     "loc": {

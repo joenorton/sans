@@ -21,7 +21,7 @@ from .recognizer import (
 from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
 from .sans_script.ast import DatasourceDeclaration # New import
 from . import __version__ as _engine_version
-from .types import type_name
+from .types import type_name, Type
 
 
 from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
@@ -385,6 +385,38 @@ def _referenced_datasource_names(irdoc: Any) -> set:
     return out
 
 
+def _assert_ingress_schemas_strict(irdoc: Any, file_name: str) -> None:
+    """
+    Enforce that every referenced csv/inline_csv datasource has concrete column types (no UNKNOWN).
+    Raises UnknownBlockStep with E_SCHEMA_REQUIRED or E_SCHEMA_LOCK_INVALID before expression typing.
+    """
+    from .ir import Loc
+    referenced = _referenced_datasource_names(irdoc)
+    for name in sorted(referenced):
+        ds = irdoc.datasources.get(name) if irdoc.datasources else None
+        if not ds or ds.kind not in ("csv", "inline_csv"):
+            continue
+        if not ds.column_types:
+            raise UnknownBlockStep(
+                code="E_SCHEMA_REQUIRED",
+                message=(
+                    f"Datasource '{name}' has no typed columns. "
+                    "Provide --schema-lock with an entry for this datasource or pin columns in the declaration."
+                ),
+                loc=Loc(file_name, 1, 1),
+            )
+        unknown_cols = [c for c, t in ds.column_types.items() if t == Type.UNKNOWN]
+        if unknown_cols:
+            raise UnknownBlockStep(
+                code="E_SCHEMA_LOCK_INVALID",
+                message=(
+                    f"Datasource '{name}' has unknown column type(s): {', '.join(sorted(unknown_cols))}. "
+                    "Lock and pinned columns must have concrete types (int, decimal, string, bool, date)."
+                ),
+                loc=Loc(file_name, 1, 1),
+            )
+
+
 def emit_check_artifacts(
     text: str,
     file_name: str = "<string>",
@@ -482,7 +514,9 @@ def emit_check_artifacts(
             )
             schema_lock_missing = sorted(missing)
         else:
-            # Enrich irdoc.datasources with lock types so irdoc.validate() / infer_table_schema_types see them
+            # Enrich irdoc.datasources with lock types; reject any lock entry with UNKNOWN column type
+            invalid_lock_ds: Optional[str] = None
+            invalid_cols: List[str] = []
             new_datasources: Dict[str, Any] = {}
             for name, ds in irdoc.datasources.items():
                 if ds.column_types:
@@ -490,6 +524,11 @@ def emit_check_artifacts(
                 elif name in lock_map:
                     entry = lock_map[name]
                     col_types = lock_entry_to_column_types(entry)
+                    unknown_in_lock = [c for c, t in col_types.items() if t == Type.UNKNOWN]
+                    if unknown_in_lock:
+                        invalid_lock_ds = name
+                        invalid_cols = sorted(unknown_in_lock)
+                        break
                     lock_cols = [c["name"] for c in (entry.get("columns") or []) if c.get("name")]
                     columns = ds.columns if ds.columns else (lock_cols if lock_cols else None)
                     new_datasources[name] = DatasourceDecl(
@@ -503,13 +542,35 @@ def emit_check_artifacts(
                     schema_lock_applied.append(name)
                 else:
                     new_datasources[name] = ds
-            irdoc = IRDoc(
-                steps=irdoc.steps,
-                tables=irdoc.tables,
-                table_facts=irdoc.table_facts,
-                datasources=new_datasources,
-            )
-            schema_lock_applied = sorted(schema_lock_applied)
+            if invalid_lock_ds is not None:
+                validation_error = UnknownBlockStep(
+                    code="E_SCHEMA_LOCK_INVALID",
+                    message=(
+                        f"Schema lock datasource '{invalid_lock_ds}' has unknown column type(s): {', '.join(invalid_cols)}. "
+                        "Lock columns must have concrete types (int, decimal, string, bool, date)."
+                    ),
+                    loc=Loc(file_name, 1, 1),
+                )
+            else:
+                irdoc = IRDoc(
+                    steps=irdoc.steps,
+                    tables=irdoc.tables,
+                    table_facts=irdoc.table_facts,
+                    datasources=new_datasources,
+                )
+                schema_lock_applied = sorted(schema_lock_applied)
+
+    # Ingress assertion: no run may proceed with UNKNOWN or uncovered datasources (before expression typing).
+    if (
+        validation_error is None
+        and not lock_generation_only
+        and strict
+        and use_sans_script
+    ):
+        try:
+            _assert_ingress_schemas_strict(irdoc, file_name)
+        except UnknownBlockStep as err:
+            validation_error = err
 
     if lock_generation_only:
         # No irdoc.validate() or type inference; we only need irdoc for datasource discovery

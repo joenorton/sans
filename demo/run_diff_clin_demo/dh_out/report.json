@@ -96,17 +96,18 @@
     ]
   },
   "timing": {
-    "compile_ms": 2,
+    "compile_ms": 0,
     "validate_ms": 0,
     "execute_ms": 3
   },
   "schema_lock_used_path": "C:\\Users\\joeno\\Documents\\GitHub\\sans\\demo\\run_diff_clin_demo\\demo_high.schema.lock.json",
-  "schema_lock_sha256": "8537bba5048ff55bcf93743d78e477acb74495ab8d69292a2399acbd0d1e7df2",
+  "schema_lock_sha256": "50ab53b7badc396cc2df5259d19a115927e50c6e4967a9eda42a52d40661a984",
   "schema_lock_applied_datasources": [
     "lb"
   ],
   "schema_lock_missing_datasources": [],
-  "report_sha256": "bd8bb922a0c4b15b11a503ab79f7607044d3416f796cc60f92a26dfb6a47c6fb",
+  "report_sha256": "6fe45ddc283746d4b3fadc80b66f25ca4ec1c1dbcb83f8c4632d3b01ad234e99",
+  "schema_lock_auto_discovered": true,
   "schema_lock_copied_path": "schema.lock.json",
   "runtime": {
     "status": "ok",

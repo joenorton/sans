@@ -100,6 +100,7 @@ This document lists the stable error codes used by SANS.
 *   `E_SCHEMA_MISSING_COL`: Input CSV is missing one or more columns required by the schema lock.
 *   `E_SCHEMA_LOCK_NOT_FOUND`: `--schema-lock` was supplied but the file was not found or could not be parsed (relative paths are resolved against the script directory).
 *   `E_SCHEMA_LOCK_MISSING_DS`: `--schema-lock` was supplied and read, but the lock does not contain an entry for one or more referenced untyped datasources.
+*   `E_SCHEMA_LOCK_INVALID`: A schema-lock entry (or pinned columns) contains an unknown or invalid column type (e.g. `unknown`). All ingress columns must have concrete types (int, decimal, string, bool, date, etc.).
 *   `E_CSV_COERCE`: A locked or typed column value could not be coerced to the expected type (see `coercion_diagnostics` in runtime.evidence.json).
 
 ## Canonical Examples

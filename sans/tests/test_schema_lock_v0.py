@@ -35,7 +35,7 @@ def _run(
     )
 
 
-# 1) Required boundary typing: script with datasource csv("x.csv") no typed columns and no schema-lock -> fails with E_SCHEMA_REQUIRED
+# 1) Required boundary typing: script with datasource csv("x.csv") no typed columns and no schema-lock -> fails with E_SCHEMA_REQUIRED (at compile or runtime)
 def test_required_boundary_no_lock_fails(tmp_path: Path):
     csv_path = tmp_path / "x.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
@@ -46,7 +46,7 @@ def test_required_boundary_no_lock_fails(tmp_path: Path):
         "save t to \"out.csv\"\n"
     )
     report = _run(script, tmp_path / "out")
-    assert report["status"] == "failed"
+    assert report["status"] in ("failed", "refused")
     assert report["primary_error"]["code"] == "E_SCHEMA_REQUIRED"
 
 
@@ -277,7 +277,7 @@ def test_enforcement_requires_lock_or_pin(tmp_path: Path):
         "save t to \"out.csv\"\n"
     )
     report_no_lock = _run(script, tmp_path / "out1")
-    assert report_no_lock["status"] == "failed"
+    assert report_no_lock["status"] in ("failed", "refused")
     assert report_no_lock["primary_error"]["code"] == "E_SCHEMA_REQUIRED"
     lock_path = tmp_path / "schema.lock.json"
     _run(script, tmp_path / "out2", emit_schema_lock_path=lock_path)
@@ -901,6 +901,225 @@ def test_run_with_lock_missing_datasource_fails_E_SCHEMA_LOCK_MISSING_DS(tmp_pat
     assert report["status"] == "refused"
     assert report.get("primary_error", {}).get("code") == "E_SCHEMA_LOCK_MISSING_DS"
     assert "lb" in (report.get("schema_lock_missing_datasources") or [])
+
+
+# 31) Lock with UNKNOWN column type fails with E_SCHEMA_LOCK_INVALID (at compile, before expression typing)
+def test_run_with_lock_unknown_column_type_fails_E_SCHEMA_LOCK_INVALID(tmp_path: Path):
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    lock_path = tmp_path / "lock.json"
+    lock_path.write_text(json.dumps({
+        "schema_lock_version": 1,
+        "created_by": {"sans_version": "0.1", "git_sha": ""},
+        "datasources": [{
+            "name": "ds",
+            "kind": "csv",
+            "path": "data.csv",
+            "columns": [{"name": "a", "type": "int"}, {"name": "b", "type": "unknown"}],
+            "rules": {"extra_columns": "ignore", "missing_columns": "error"},
+        }],
+    }, indent=2), encoding="utf-8")
+    script = (
+        "# sans 0.1\n"
+        f'datasource ds = csv("{csv_path.as_posix()}")\n'
+        "table t = from(ds) select a, b\n"
+        'save t to "out.csv"\n'
+    )
+    report = _run(script, tmp_path / "out", schema_lock_path=lock_path)
+    assert report["status"] == "refused"
+    assert report.get("primary_error", {}).get("code") == "E_SCHEMA_LOCK_INVALID"
+    assert "b" in (report.get("primary_error", {}).get("message") or "")
+
+
+# 32) inline_csv without pin or lock fails with E_SCHEMA_REQUIRED
+def test_inline_csv_no_pin_no_lock_fails_E_SCHEMA_REQUIRED(tmp_path: Path):
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n  1,2\n"
+        "end\n"
+        "table t = from(in) select a, b\n"
+        'save t to "out.csv"\n'
+    )
+    report = _run(script, tmp_path / "out")
+    assert report["status"] in ("failed", "refused")
+    assert report.get("primary_error", {}).get("code") == "E_SCHEMA_REQUIRED"
+
+
+# 33) inline_csv with schema-lock succeeds (lock covers inline_csv like csv)
+def test_inline_csv_with_lock_succeeds(tmp_path: Path):
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n  1,2\n"
+        "end\n"
+        "table t = from(in) select a, b\n"
+        'save t to "out.csv"\n'
+    )
+    lock_path = tmp_path / "lock.json"
+    lock_path.write_text(json.dumps({
+        "schema_lock_version": 1,
+        "created_by": {"sans_version": "0.1", "git_sha": ""},
+        "datasources": [{
+            "name": "in",
+            "kind": "inline_csv",
+            "columns": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}],
+            "rules": {"extra_columns": "ignore", "missing_columns": "error"},
+        }],
+    }, indent=2), encoding="utf-8")
+    report = _run(script, tmp_path / "out", schema_lock_path=lock_path)
+    assert report["status"] == "ok"
+    assert (tmp_path / "out" / "outputs" / "out.csv").exists()
+
+
+# --- Autodiscovery: sans run uses lock next to script when --schema-lock not provided ---
+
+# 34) Autodiscovery success: generate lock with sans schema-lock, then run without --schema-lock
+def test_autodiscovery_success(tmp_path: Path):
+    import subprocess
+    import sys
+    csv_path = tmp_path / "lb.csv"
+    csv_path.write_text("USUBJID,VISITNUM\nS001,1\n", encoding="utf-8")
+    script_path = tmp_path / "demo_high.sans"
+    script_path.write_text(
+        "# sans 0.1\n"
+        'datasource lb = csv("lb.csv")\n'
+        "table t = from(lb) select USUBJID, VISITNUM\n"
+        'save t to "out.csv"\n',
+        encoding="utf-8",
+    )
+    # Generate lock next to script (default)
+    result = subprocess.run(
+        [sys.executable, "-m", "sans", "schema-lock", "demo_high.sans"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    lock_file = tmp_path / "demo_high.schema.lock.json"
+    assert lock_file.exists()
+    # Run WITHOUT --schema-lock; should autodiscover and succeed
+    out_dir = tmp_path / "dh_out"
+    result2 = subprocess.run(
+        [sys.executable, "-m", "sans", "run", "demo_high.sans", "--out", str(out_dir)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result2.returncode == 0, (result2.stdout, result2.stderr)
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "ok"
+    # Autodiscovery visibility: report must include all three fields
+    assert report.get("schema_lock_auto_discovered") is True
+    assert report.get("schema_lock_used_path") == str(lock_file.resolve())
+    assert "schema_lock_sha256" in report and report["schema_lock_sha256"]
+    assert (out_dir / "schema.lock.json").exists()
+    assert (out_dir / "outputs" / "out.csv").exists()
+
+
+# 34b) Autodiscovery report visibility (no subprocess): schema_lock_auto_discovered, schema_lock_used_path, schema_lock_sha256
+def test_autodiscovery_report_visibility(tmp_path: Path):
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    script_path = tmp_path / "run.sans"
+    script_path.write_text(
+        "# sans 0.1\n"
+        f'datasource ds = csv("{csv_path.as_posix()}")\n'
+        "table t = from(ds) select a, b\n"
+        'save t to "out.csv"\n',
+        encoding="utf-8",
+    )
+    lock_path = tmp_path / "run.schema.lock.json"
+    lock_path.write_text(json.dumps({
+        "schema_lock_version": 1,
+        "created_by": {"sans_version": "0.1", "git_sha": ""},
+        "datasources": [{
+            "name": "ds",
+            "kind": "csv",
+            "path": "data.csv",
+            "columns": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}],
+            "rules": {"extra_columns": "ignore", "missing_columns": "error"},
+        }],
+    }, indent=2), encoding="utf-8")
+    report = run_script(
+        text=script_path.read_text(encoding="utf-8"),
+        file_name=str(script_path),
+        bindings={},
+        out_dir=tmp_path / "out",
+        strict=True,
+        schema_lock_path=None,
+    )
+    assert report["status"] == "ok"
+    assert report.get("schema_lock_auto_discovered") is True
+    assert report.get("schema_lock_used_path") == str(lock_path.resolve())
+    assert "schema_lock_sha256" in report and report["schema_lock_sha256"]
+
+
+# 35) Autodiscovery missing lock: run without lock and without pins -> E_SCHEMA_REQUIRED, message mentions searched paths
+def test_autodiscovery_missing_lock(tmp_path: Path):
+    csv_path = tmp_path / "x.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    script = (
+        "# sans 0.1\n"
+        f'datasource x = csv("{csv_path.as_posix()}")\n'
+        "table t = from(x) select a\n"
+        'save t to "out.csv"\n'
+    )
+    report = _run(script, tmp_path / "out")
+    assert report["status"] in ("failed", "refused")
+    assert report.get("primary_error", {}).get("code") == "E_SCHEMA_REQUIRED"
+    msg = report.get("primary_error", {}).get("message") or ""
+    assert "Looked for" in msg or "schema.lock.json" in msg or "schema-lock" in msg
+    assert report.get("schema_lock_auto_discovered") is True
+
+
+# 36) Autodiscovery does not trigger when all datasources are pinned
+def test_autodiscovery_does_not_trigger_when_pinned(tmp_path: Path):
+    csv_path = tmp_path / "x.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    script = (
+        "# sans 0.1\n"
+        f'datasource x = csv("{csv_path.as_posix()}", columns(a:int, b:int))\n'
+        "table t = from(x) select a, b\n"
+        'save t to "out.csv"\n'
+    )
+    report = _run(script, tmp_path / "out")
+    assert report["status"] == "ok"
+    assert report.get("schema_lock_auto_discovered") is False
+    assert (tmp_path / "out" / "outputs" / "out.csv").exists()
+
+
+# 37) Autodiscovery invalid lock: lock missing datasource or unknown type -> refuse with explicit code (not E_TYPE_UNKNOWN)
+def test_autodiscovery_invalid_lock_fails(tmp_path: Path):
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    script_path = tmp_path / "demo.sans"
+    script_path.write_text(
+        "# sans 0.1\n"
+        'datasource ds = csv("data.csv")\n'
+        "table t = from(ds) select a, b\n"
+        'save t to "out.csv"\n',
+        encoding="utf-8",
+    )
+    # Lock missing datasource "ds" (entry is for "other"); place next to script so autodiscovery finds it
+    lock_path = tmp_path / "demo.schema.lock.json"
+    lock_path.write_text(json.dumps({
+        "schema_lock_version": 1,
+        "created_by": {"sans_version": "0.1", "git_sha": ""},
+        "datasources": [{"name": "other", "kind": "csv", "path": "x.csv", "columns": [{"name": "x", "type": "int"}], "rules": {"extra_columns": "ignore", "missing_columns": "error"}}],
+    }, indent=2), encoding="utf-8")
+    report = run_script(
+        text=script_path.read_text(encoding="utf-8"),
+        file_name=str(script_path),
+        bindings={},
+        out_dir=tmp_path / "out",
+        strict=True,
+        schema_lock_path=None,
+    )
+    assert report["status"] == "refused"
+    assert report.get("schema_lock_auto_discovered") is True
+    assert report.get("primary_error", {}).get("code") in ("E_SCHEMA_LOCK_MISSING_DS", "E_SCHEMA_LOCK_INVALID")
+    assert report.get("primary_error", {}).get("code") != "E_TYPE_UNKNOWN"
 
 
 # schema_lock module: lock_by_name, lock_entry_required_columns
