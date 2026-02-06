@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .compiler import emit_check_artifacts
-from .runtime import run_script
+from .runtime import run_script, RuntimeFailure
 from .validator_sdtm import validate_sdtm
 from .fmt import FMT_STYLE_ID, format_text, normalize_newlines
 from . import __version__ as _engine_version
@@ -116,6 +116,18 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--legacy-sas", action="store_true", default=False, help="Enable legacy SAS expression operators for .sas")
     run_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json to enforce when ingesting datasources")
     run_parser.add_argument("--emit-schema-lock", metavar="path", default=None, help="After successful run, write schema.lock.json to this path")
+    run_parser.add_argument("--lock-only", action="store_true", help="With --emit-schema-lock: generate lock only, do not execute (even if all datasources are typed)")
+
+    schema_lock_parser = subparsers.add_parser("schema-lock", help="Generate schema.lock.json without execution (no --out required)")
+    schema_lock_parser.add_argument("script", help="Path to the script file")
+    schema_lock_parser.add_argument("--write", "-o", dest="write", default=None, metavar="path", help="Lock output path (default: <script_dir>/<script_stem>.schema.lock.json); relative paths resolved against script dir")
+    schema_lock_parser.add_argument("--out", default=None, metavar="dir", help="Optional: also write report.json and stage inputs under this directory")
+    schema_lock_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
+    schema_lock_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
+    schema_lock_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
+    schema_lock_parser.add_argument("--allow-include-escape", action="store_true", default=False)
+    schema_lock_parser.add_argument("--schema-lock", metavar="path", default=None, help="Existing lock to merge or supply types for untyped refs")
+    schema_lock_parser.add_argument("--legacy-sas", action="store_true", default=False, help="Accept legacy SAS syntax for lock generation")
 
     validate_parser = subparsers.add_parser("validate", help="Validate tables against a profile")
     validate_parser.add_argument("--profile", required=True, help="Validation profile (e.g., sdtm)")
@@ -307,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             legacy_sas=args.legacy_sas,
             schema_lock_path=schema_lock_path,
             emit_schema_lock_path=emit_schema_lock_path,
+            lock_only=getattr(args, "lock_only", False),
         )
 
         status = report.get("status")
@@ -322,7 +335,76 @@ def main(argv: list[str] | None = None) -> int:
             print(f"failed: {primary.get('code')} at {loc_str}".rstrip())
         else:
             print("ok: wrote plan.ir.json report.json registry.candidate.json runtime.evidence.json")
+            emit_path = report.get("schema_lock_emit_path")
+            if emit_path:
+                mode = report.get("schema_lock_mode", "")
+                suffix = " (lock-only)" if mode == "generated_only" else " (after run)"
+                print(f"ok: wrote schema lock to {emit_path}{suffix}")
         return int(report.get("exit_code_bucket", 50))
+
+    if args.command == "schema-lock":
+        from .runtime import generate_schema_lock_standalone
+        script_path = Path(args.script)
+        if not script_path.exists():
+            print(f"failed: script not found: {script_path}")
+            return 50
+        script_dir = script_path.resolve().parent
+        script_stem = script_path.stem
+        if args.write:
+            write_arg = Path(args.write)
+            write_path = (script_dir / write_arg).resolve() if not write_arg.is_absolute() else write_arg.resolve()
+        else:
+            write_path = (script_dir / f"{script_stem}.schema.lock.json").resolve()
+        bindings = {}
+        if args.tables:
+            for item in args.tables.split(","):
+                if not item.strip():
+                    continue
+                if "=" not in item:
+                    print(f"failed: Invalid table binding '{item}'")
+                    return 50
+                name, path = item.split("=", 1)
+                name = name.strip()
+                if name in bindings:
+                    print(f"failed: Duplicate table binding for '{name}'")
+                    return 50
+                bindings[name] = path.strip()
+        try:
+            text = script_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"failed: {exc}")
+            return 50
+        include_roots = [Path(p) for p in args.include_root] if args.include_root else None
+        out_dir = Path(args.out).resolve() if args.out else None
+        schema_lock_path = Path(args.schema_lock) if args.schema_lock else None
+        try:
+            report = generate_schema_lock_standalone(
+                text=text,
+                file_name=str(script_path),
+                write_path=write_path,
+                out_dir=out_dir,
+                bindings=bindings or None,
+                schema_lock_path=schema_lock_path,
+                include_roots=include_roots,
+                allow_absolute_includes=args.allow_absolute_include,
+                allow_include_escape=args.allow_include_escape,
+                strict=True,
+                legacy_sas=args.legacy_sas,
+            )
+        except RuntimeFailure as e:
+            print(f"failed: {e.code} {e.message}")
+            return 50
+        status = report.get("status")
+        if status == "refused":
+            primary = report.get("primary_error") or {}
+            loc = primary.get("loc") or {}
+            loc_str = f"{loc.get('file')}:{loc.get('line_start')}" if loc else ""
+            print(f"refused: {primary.get('code')} at {loc_str}".rstrip())
+        else:
+            print(f"ok: wrote schema lock to {write_path}")
+            if out_dir:
+                print("ok: wrote report.json and staged inputs to", out_dir)
+        return int(report.get("exit_code_bucket", 0 if status == "ok" else 50))
 
     if args.command == "validate":
         out_dir = Path(args.out)

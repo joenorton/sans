@@ -19,6 +19,7 @@ Top-level fields
 - `plan_path`: bundle-relative path to plan (e.g. `artifacts/plan.ir.json`).
 - `report_sha256`: SHA-256 of the canonical report payload (used by `sans verify` for self-check).
 - `schema_lock_sha256`: (optional) SHA-256 of the canonical schema lock JSON when the run used or emitted a schema lock; used by `sans verify --schema-lock` to bind the run to a lock file.
+- When `--emit-schema-lock` was used, the report also includes: `schema_lock_mode` (`"generated_only"` or `"ran_and_emitted"`), `lock_only` (boolean), `schema_lock_path` (bundle-relative or absolute), and `schema_lock_emit_path` (absolute path where the lock was written).
 - `engine`: `{name, version}`.
 - `settings`: effective settings used for this run.
 - `timing`: `{compile_ms, validate_ms, execute_ms}` (values may be `null`).

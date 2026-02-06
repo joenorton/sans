@@ -151,8 +151,39 @@ See [DETERMINISM.md](./DETERMINISM.md) for the sacred v1 invariants.
 
 ---
 
+## Schema lock
+
+Typed CSV ingestion without hand-typing every column: a run must have either **typed pinning** in the datasource (e.g. `columns(a:int, b:decimal)`) or a **schema lock** file.
+
+- **Generate a lock**  
+  **Recommended**: use the dedicated subcommand (no `--out` required; lock written next to the script by default):
+  ```bash
+  sans schema-lock script.sans
+  ```
+  This writes `<script_dir>/<script_stem>.schema.lock.json` (e.g. `demo_high.schema.lock.json` next to `demo_high.sans`). Use `-o PATH` or `--write PATH` to override; relative paths are resolved against the script directory. Optionally add `--out DIR` to also write `report.json` and stage inputs under `DIR/inputs`. No pipeline execution.
+
+  Alternatively, after a successful run or from untyped CSVs via run:
+  ```bash
+  sans run script.sans --out out --emit-schema-lock schema.lock.json
+  ```
+  The lock is written under `--out` when the path is relative. With untyped datasources the tool runs in **lock-only** mode; otherwise it runs normally and emits the lock after success. Stdout shows `(lock-only)` or `(after run)`.
+
+- **Run with a lock**  
+  Omit column types in the script and pass the lock:
+  ```bash
+  sans run script.sans --out out --schema-lock schema.lock.json
+  ```
+  The lock is copied into `out/schema.lock.json` so the bundle is self-contained. Extra columns in input are ignored; missing columns or type mismatches fail with clear codes. The report includes `schema_lock_sha256`, `schema_lock_used_path`, and `schema_lock_copied_path`; when a lock was emitted, also `schema_lock_mode` and `schema_lock_path`.
+
+- **Lock-only via run**  
+  To generate a lock under `--out` without running (e.g. for CI bundles): `sans run script.sans --out out --emit-schema-lock schema.lock.json --lock-only`. Prefer `sans schema-lock script.sans` when you only need the lock file.
+
+See [SCHEMA_LOCK_V0.md](./docs/SCHEMA_LOCK_V0.md) for the full contract, path resolution, report fields, inference rules, and error codes.
+
+---
+
 ## Deep References
 
-- **Specs**: [SUBSET_SPEC.md](./docs/SUBSET_SPEC.md) | [REPORT_CONTRACT.md](./docs/REPORT_CONTRACT.md) | [IR_CANONICAL_PARAMS.md](./docs/IR_CANONICAL_PARAMS.md)
+- **Specs**: [SUBSET_SPEC.md](./docs/SUBSET_SPEC.md) | [REPORT_CONTRACT.md](./docs/REPORT_CONTRACT.md) | [IR_CANONICAL_PARAMS.md](./docs/IR_CANONICAL_PARAMS.md) | [SCHEMA_LOCK_V0.md](./docs/SCHEMA_LOCK_V0.md)
 - **Internals**: [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | [IR_SPEC.md](./docs/IR_SPEC.md)
 - **Guidance**: [ERROR_CODES.md](./docs/ERROR_CODES.md) | [BIG_PIC.md](./docs/BIG_PIC.md)

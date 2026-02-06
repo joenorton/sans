@@ -1534,10 +1534,11 @@ def execute_plan(
                 ds_decl = ir_doc.datasources.get(ds_name) if isinstance(ds_name, str) else None
                 column_types = ds_decl.column_types if ds_decl and ds_decl.column_types else None
                 required_columns: Optional[List[str]] = None
-                if not column_types and ds_name and lock_by_name and ds_name in lock_by_name:
+                if ds_name and lock_by_name and ds_name in lock_by_name:
                     from .schema_lock import lock_entry_to_column_types, lock_entry_required_columns
                     lock_entry = lock_by_name[ds_name]
-                    column_types = lock_entry_to_column_types(lock_entry)
+                    if not column_types:
+                        column_types = lock_entry_to_column_types(lock_entry)
                     required_columns = lock_entry_required_columns(lock_entry)
                 data_dir = out_dir / INPUTS_DATA
                 data_dir.mkdir(parents=True, exist_ok=True)
@@ -1996,6 +1997,187 @@ def _referenced_csv_datasource_names(irdoc: IRDoc) -> set:
     return out
 
 
+def _resolve_datasource_path_for_inference(file_name: str, ds: Any) -> Optional[Path]:
+    """Resolve CSV datasource path for lock-generation inference. Absolute paths as-is; else relative to script dir."""
+    if not ds or ds.kind != "csv":
+        return None
+    raw = ds.path or ""
+    if not raw:
+        return None
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    script_dir = Path(file_name).resolve().parent
+    return script_dir / raw
+
+
+def _is_untyped_referenced(irdoc: Any, ds_name: str, lock_map: Dict[str, Any]) -> bool:
+    """True if this referenced datasource has no typed pinning and no lock entry."""
+    ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+    if not ds or ds.kind not in ("csv", "inline_csv"):
+        return False
+    if ds.column_types:
+        return False
+    if ds_name in lock_map:
+        return False
+    return True
+
+
+def generate_schema_lock_standalone(
+    text: str,
+    file_name: str,
+    write_path: str | Path,
+    out_dir: Optional[Path] = None,
+    bindings: Optional[Dict[str, str]] = None,
+    schema_lock_path: Optional[Path] = None,
+    include_roots: Optional[List[Path]] = None,
+    allow_absolute_includes: bool = False,
+    allow_include_escape: bool = False,
+    strict: bool = True,
+    legacy_sas: bool = False,
+) -> Dict[str, Any]:
+    """
+    Generate schema.lock.json without execution. Writes lock to write_path.
+    If out_dir is set, also writes report.json and stages inputs under out_dir (mini bundle).
+    """
+    import shutil
+    import tempfile
+    work_dir = Path(out_dir).resolve() if out_dir else Path(tempfile.mkdtemp())
+    try:
+        irdoc, report = emit_check_artifacts(
+            text=text,
+            file_name=file_name,
+            tables=set(bindings.keys()) if bindings else None,
+            out_dir=work_dir,
+            strict=strict,
+            include_roots=include_roots,
+            allow_absolute_includes=allow_absolute_includes,
+            allow_include_escape=allow_include_escape,
+            emit_vars_graph=False,
+            legacy_sas=legacy_sas,
+            lock_generation_only=True,
+        )
+        if report.get("status") == "refused":
+            if out_dir:
+                (work_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return report
+
+        schema_lock: Optional[Dict[str, Any]] = None
+        if schema_lock_path and Path(schema_lock_path).exists():
+            from .schema_lock import load_schema_lock
+            schema_lock = load_schema_lock(Path(schema_lock_path))
+        from .schema_lock import lock_by_name
+        lock_map = lock_by_name(schema_lock) if schema_lock else {}
+        referenced = _referenced_csv_datasource_names(irdoc)
+        untyped = [n for n in referenced if _is_untyped_referenced(irdoc, n, lock_map)]
+
+        script_dir = Path(file_name).resolve().parent
+        for ds_name in untyped:
+            ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+            if not ds or ds.kind != "csv":
+                continue
+            resolved = _resolve_datasource_path_for_inference(file_name, ds)
+            if not resolved or not resolved.exists():
+                raise RuntimeFailure(
+                    "SANS_LOCK_GEN_FILE_NOT_FOUND",
+                    f"Datasource '{ds_name}' file not found for schema lock generation: {resolved}",
+                    None,
+                )
+        from .schema_infer import DEFAULT_INFER_MAX_ROWS
+        from .schema_lock import build_schema_lock, compute_lock_sha256, write_schema_lock
+        lock_dict = build_schema_lock(
+            irdoc,
+            referenced,
+            schema_lock_used=schema_lock,
+            sans_version=_engine_version,
+            script_dir=script_dir,
+            infer_untyped=bool(untyped),
+            max_infer_rows=DEFAULT_INFER_MAX_ROWS,
+        )
+        write_path_resolved = Path(write_path).resolve()
+        write_schema_lock(lock_dict, write_path_resolved)
+        report["schema_lock_sha256"] = compute_lock_sha256(lock_dict)
+        report["schema_lock_mode"] = "generated_only"
+        report["lock_only"] = True
+        report["schema_lock_emit_path"] = str(write_path_resolved)
+        try:
+            report["schema_lock_path"] = bundle_relative_path(write_path_resolved, work_dir)
+        except ValueError:
+            report["schema_lock_path"] = str(write_path_resolved)
+        report["status"] = "ok"
+        report["exit_code_bucket"] = 0
+        report["primary_error"] = None
+        report["diagnostics"] = []
+        report["outputs"] = []
+        report["runtime"] = {"status": "ok", "timing": {"execute_ms": None}}
+        report["timing"]["execute_ms"] = None
+
+        if out_dir:
+            ensure_bundle_layout(work_dir)
+            expanded_path = work_dir / INPUTS_SOURCE / "expanded.sans"
+            expanded_path.write_text(irdoc_to_expanded_sans(irdoc), encoding="utf-8")
+            expanded_rel = bundle_relative_path(expanded_path, work_dir)
+            report["inputs"].append({
+                "role": "expanded",
+                "name": "expanded.sans",
+                "path": expanded_rel,
+                "sha256": compute_input_hash(expanded_path) or "",
+            })
+            data_dir = work_dir / INPUTS_DATA
+            data_dir.mkdir(parents=True, exist_ok=True)
+            for ds_name in referenced:
+                ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+                if not ds or ds.kind not in ("csv", "inline_csv"):
+                    continue
+                if ds.kind == "csv":
+                    src = _resolve_datasource_path_for_inference(file_name, ds)
+                    if src and src.exists():
+                        dest = data_dir / f"{ds_name}{src.suffix}"
+                        shutil.copy2(src, dest)
+                        rel = bundle_relative_path(dest, work_dir)
+                        report["inputs"].append({
+                            "role": "datasource",
+                            "name": ds_name,
+                            "path": rel,
+                            "sha256": compute_input_hash(dest) or "",
+                        })
+                elif ds.kind == "inline_csv" and (ds.inline_text or "").strip():
+                    dest = data_dir / f"{ds_name}.csv"
+                    dest.write_text(ds.inline_text or "", encoding="utf-8")
+                    rel = bundle_relative_path(dest, work_dir)
+                    report["inputs"].append({
+                        "role": "datasource",
+                        "name": ds_name,
+                        "path": rel,
+                        "sha256": compute_input_hash(dest) or "",
+                    })
+            report["report_sha256"] = compute_report_sha256(report, work_dir)
+            (work_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return report
+    finally:
+        if not out_dir:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _resolve_schema_lock_path(lock_path: Path, script_path: Path, cwd: Path) -> Path:
+    """Resolve --schema-lock path: absolute as-is; relative resolved against script directory (not out_dir)."""
+    p = Path(lock_path)
+    if p.is_absolute():
+        return p.resolve()
+    script_dir = Path(script_path).resolve().parent
+    return (script_dir / p).resolve()
+
+
+def _resolve_emit_schema_lock_path(emit_path: Optional[Path], out_dir: Path) -> Optional[Path]:
+    """Resolve --emit-schema-lock path: relative paths are resolved against out_dir, absolute as-is."""
+    if emit_path is None:
+        return None
+    p = Path(emit_path)
+    if p.is_absolute():
+        return p
+    return Path(out_dir).resolve() / p
+
+
 def run_script(
     text: str,
     file_name: str,
@@ -2009,7 +2191,83 @@ def run_script(
     legacy_sas: bool = False,
     schema_lock_path: Optional[Path] = None,
     emit_schema_lock_path: Optional[Path] = None,
+    lock_only: bool = False,
 ) -> Dict[str, Any]:
+    out_path = Path(out_dir).resolve()
+    resolved_emit_lock_path = _resolve_emit_schema_lock_path(emit_schema_lock_path, out_path)
+
+    # When emitting a lock, do a light compile first (no type validation) so we can discover
+    # untyped datasources without failing on E_TYPE_UNKNOWN in filter/derive/etc.
+    lock_generation_only = bool(emit_schema_lock_path)
+
+    # Load schema lock before compile when provided, so compiler can apply it for type inference.
+    schema_lock: Optional[Dict[str, Any]] = None
+    resolved_schema_lock_path: Optional[Path] = None
+    if schema_lock_path is not None:
+        resolved_schema_lock_path = _resolve_schema_lock_path(
+            Path(schema_lock_path), Path(file_name), Path.cwd()
+        )
+        if not resolved_schema_lock_path.exists():
+            ensure_bundle_layout(out_path)
+            report = {
+                "report_schema_version": "0.3",
+                "status": "failed",
+                "exit_code_bucket": 50,
+                "primary_error": None,
+                "diagnostics": [],
+                "inputs": [],
+                "artifacts": [],
+                "outputs": [],
+                "schema_lock_used_path": str(resolved_schema_lock_path),
+                "schema_lock_sha256": None,
+                "schema_lock_applied_datasources": [],
+                "schema_lock_missing_datasources": [],
+            }
+            report["primary_error"] = {
+                "code": "E_SCHEMA_LOCK_NOT_FOUND",
+                "message": f"Schema lock file not found: {resolved_schema_lock_path}",
+                "loc": None,
+            }
+            report["diagnostics"] = [report["primary_error"]]
+            report["runtime"] = {"status": "failed", "timing": {"execute_ms": None}}
+            report_path = Path(out_dir) / "report.json"
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return report
+        try:
+            from .schema_lock import load_schema_lock
+            schema_lock = load_schema_lock(resolved_schema_lock_path)
+        except Exception as e:
+            ensure_bundle_layout(out_path)
+            report = {
+                "report_schema_version": "0.3",
+                "status": "failed",
+                "exit_code_bucket": 50,
+                "primary_error": None,
+                "diagnostics": [],
+                "inputs": [],
+                "artifacts": [],
+                "outputs": [],
+                "schema_lock_used_path": str(resolved_schema_lock_path),
+                "schema_lock_sha256": None,
+                "schema_lock_applied_datasources": [],
+                "schema_lock_missing_datasources": [],
+            }
+            report["primary_error"] = {
+                "code": "E_SCHEMA_LOCK_NOT_FOUND",
+                "message": f"Schema lock file invalid at {resolved_schema_lock_path}: {e}",
+                "loc": None,
+            }
+            report["diagnostics"] = [report["primary_error"]]
+            report["runtime"] = {"status": "failed", "timing": {"execute_ms": None}}
+            report_path = Path(out_dir) / "report.json"
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return report
+        schema_lock_path = resolved_schema_lock_path
+
+    # Reuse loaded lock when lock_generation_only so we don't load twice
+    schema_lock_for_emit = schema_lock if (schema_lock is not None and not lock_generation_only) else None
+    resolved_for_emit = resolved_schema_lock_path if (resolved_schema_lock_path is not None and not lock_generation_only) else None
+
     irdoc, report = emit_check_artifacts(
         text=text,
         file_name=file_name,
@@ -2021,6 +2279,9 @@ def run_script(
         allow_include_escape=allow_include_escape,
         emit_vars_graph=False,
         legacy_sas=legacy_sas,
+        lock_generation_only=lock_generation_only,
+        schema_lock=schema_lock_for_emit,
+        schema_lock_path_resolved=resolved_for_emit,
     )
 
     # If compilation/validation refused, annotate runtime and exit.
@@ -2030,12 +2291,6 @@ def run_script(
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report
 
-    schema_lock: Optional[Dict[str, Any]] = None
-    if schema_lock_path and Path(schema_lock_path).exists():
-        from .schema_lock import load_schema_lock
-        schema_lock = load_schema_lock(Path(schema_lock_path))
-
-    out_path = Path(out_dir).resolve()
     ensure_bundle_layout(out_path)
 
     # Write expanded.sans to inputs/source/ and add to report inputs (role=expanded)
@@ -2054,6 +2309,128 @@ def run_script(
     bindings_in: Dict[str, str] = {}
     try:
         referenced = _referenced_csv_datasource_names(irdoc)
+        from .schema_lock import lock_by_name
+        lock_map = lock_by_name(schema_lock) if schema_lock else {}
+        untyped = [
+            ds_name for ds_name in referenced
+            if _is_untyped_referenced(irdoc, ds_name, lock_map)
+        ]
+
+        # Lock-only path: emit schema lock without executing (untyped refs, or --lock-only)
+        if emit_schema_lock_path and (untyped or lock_only):
+            import shutil
+            from .schema_infer import DEFAULT_INFER_MAX_ROWS
+            from .schema_lock import build_schema_lock, compute_lock_sha256, write_schema_lock
+            script_dir = Path(file_name).resolve().parent
+            for ds_name in untyped:
+                ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+                if not ds:
+                    continue
+                if ds.kind == "csv":
+                    resolved = _resolve_datasource_path_for_inference(file_name, ds)
+                    if not resolved or not resolved.exists():
+                        raise RuntimeFailure(
+                            "SANS_LOCK_GEN_FILE_NOT_FOUND",
+                            f"Datasource '{ds_name}' file not found for schema lock generation: {resolved}",
+                            None,
+                        )
+            lock_dict = build_schema_lock(
+                irdoc,
+                referenced,
+                schema_lock_used=schema_lock,
+                sans_version=_engine_version,
+                script_dir=script_dir,
+                infer_untyped=bool(untyped),
+                max_infer_rows=DEFAULT_INFER_MAX_ROWS,
+            )
+            write_schema_lock(lock_dict, resolved_emit_lock_path)
+            report["schema_lock_sha256"] = compute_lock_sha256(lock_dict)
+            report["schema_lock_mode"] = "generated_only"
+            report["lock_only"] = True
+            report["schema_lock_emit_path"] = str(resolved_emit_lock_path)
+            try:
+                report["schema_lock_path"] = bundle_relative_path(resolved_emit_lock_path, out_path)
+            except ValueError:
+                report["schema_lock_path"] = str(resolved_emit_lock_path)
+            # Stage referenced datasource files into out_dir/inputs for a complete bundle
+            data_dir = out_path / INPUTS_DATA
+            data_dir.mkdir(parents=True, exist_ok=True)
+            for ds_name in referenced:
+                ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+                if not ds or ds.kind not in ("csv", "inline_csv"):
+                    continue
+                if ds.kind == "csv":
+                    src = _resolve_datasource_path_for_inference(file_name, ds)
+                    if src and src.exists():
+                        dest = data_dir / f"{ds_name}{src.suffix}"
+                        shutil.copy2(src, dest)
+                        rel = bundle_relative_path(dest, out_path)
+                        report["inputs"].append({
+                            "role": "datasource",
+                            "name": ds_name,
+                            "path": rel,
+                            "sha256": compute_input_hash(dest) or "",
+                        })
+                elif ds.kind == "inline_csv" and (ds.inline_text or "").strip():
+                    dest = data_dir / f"{ds_name}.csv"
+                    dest.write_text(ds.inline_text or "", encoding="utf-8")
+                    rel = bundle_relative_path(dest, out_path)
+                    report["inputs"].append({
+                        "role": "datasource",
+                        "name": ds_name,
+                        "path": rel,
+                        "sha256": compute_input_hash(dest) or "",
+                    })
+            report["status"] = "ok"
+            report["exit_code_bucket"] = 0
+            report["primary_error"] = None
+            report["diagnostics"] = []
+            report["outputs"] = []
+            report["runtime"] = {"status": "ok", "timing": {"execute_ms": None}}
+            report["timing"]["execute_ms"] = None
+            report["report_sha256"] = compute_report_sha256(report, out_path)
+            report_path = out_path / "report.json"
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return report
+
+        # We had emit_schema_lock_path but no untyped refs; need full compile for execution
+        if lock_generation_only:
+            irdoc, report = emit_check_artifacts(
+                text=text,
+                file_name=file_name,
+                tables=set(bindings.keys()) if bindings else None,
+                out_dir=out_dir,
+                strict=strict,
+                include_roots=include_roots,
+                allow_absolute_includes=allow_absolute_includes,
+                allow_include_escape=allow_include_escape,
+                emit_vars_graph=False,
+                legacy_sas=legacy_sas,
+                lock_generation_only=False,
+            )
+            if report.get("status") == "refused":
+                report["runtime"] = {"status": "refused", "timing": {"execute_ms": None}}
+                report_path = out_path / "report.json"
+                report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                return report
+            # Write expanded.sans and add to report inputs (compiler does not add expanded)
+            expanded_path.write_text(irdoc_to_expanded_sans(irdoc), encoding="utf-8")
+            expanded_sha = compute_input_hash(expanded_path) or ""
+            report["inputs"].append({
+                "role": "expanded",
+                "name": "expanded.sans",
+                "path": expanded_rel,
+                "sha256": expanded_sha,
+            })
+
+        # Copy provided schema lock into out_dir so the bundle is self-contained
+        if schema_lock_path and schema_lock:
+            import shutil
+            copy_dest = out_path / "schema.lock.json"
+            shutil.copy2(Path(schema_lock_path), copy_dest)
+            report["schema_lock_used_path"] = str(Path(schema_lock_path).resolve())
+            report["schema_lock_copied_path"] = "schema.lock.json"
+
         for ds_name in referenced:
             ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
             if not ds or ds.kind not in ("csv", "inline_csv"):
@@ -2066,8 +2443,6 @@ def run_script(
                     f"Datasource '{ds_name}' has no typed columns. Provide --schema-lock or typed columns(...).",
                     None,
                 )
-            from .schema_lock import lock_by_name
-            lock_map = lock_by_name(schema_lock)
             if ds_name not in lock_map:
                 raise RuntimeFailure(
                     "E_SCHEMA_REQUIRED",
@@ -2285,12 +2660,19 @@ def run_script(
         "sha256": compute_artifact_hash(evidence_path) or "",
     })
 
-    if emit_schema_lock_path and result.status in ("ok", "ok_warnings"):
+    if resolved_emit_lock_path is not None and result.status in ("ok", "ok_warnings"):
         from .schema_lock import build_schema_lock, write_schema_lock, compute_lock_sha256
         referenced = _referenced_csv_datasource_names(irdoc)
         lock_dict = build_schema_lock(irdoc, referenced, schema_lock_used=schema_lock, sans_version=_engine_version)
-        write_schema_lock(lock_dict, Path(emit_schema_lock_path))
+        write_schema_lock(lock_dict, resolved_emit_lock_path)
         report["schema_lock_sha256"] = compute_lock_sha256(lock_dict)
+        report["schema_lock_mode"] = "ran_and_emitted"
+        report["lock_only"] = False
+        report["schema_lock_emit_path"] = str(resolved_emit_lock_path)
+        try:
+            report["schema_lock_path"] = bundle_relative_path(resolved_emit_lock_path, bundle_root)
+        except ValueError:
+            report["schema_lock_path"] = str(resolved_emit_lock_path)
     elif schema_lock:
         from .schema_lock import compute_lock_sha256
         report["schema_lock_sha256"] = compute_lock_sha256(schema_lock)

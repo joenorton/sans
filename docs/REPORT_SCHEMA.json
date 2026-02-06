@@ -79,7 +79,14 @@
           }
         }
       }
-    }
+    },
+    "schema_lock_sha256": {"type": "string", "description": "SHA-256 of canonical lock JSON when a schema lock was used or emitted"},
+    "schema_lock_mode": {"type": "string", "enum": ["generated_only", "ran_and_emitted"], "description": "Present when --emit-schema-lock was used: generated_only = lock-only, ran_and_emitted = lock written after run"},
+    "lock_only": {"type": "boolean", "description": "True when run was lock-only (no execution)"},
+    "schema_lock_path": {"type": "string", "description": "Bundle-relative or absolute path to the emitted lock file"},
+    "schema_lock_emit_path": {"type": "string", "description": "Absolute path where the lock file was written"},
+    "schema_lock_used_path": {"type": "string", "description": "When --schema-lock was provided: original path passed by user"},
+    "schema_lock_copied_path": {"type": "string", "description": "When --schema-lock was provided: bundle-relative path of lock copy in out_dir (e.g. schema.lock.json)"}
   },
   "definitions": {
     "loc": {

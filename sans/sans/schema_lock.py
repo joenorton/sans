@@ -74,13 +74,20 @@ def build_schema_lock(
     referenced_names: Set[str],
     schema_lock_used: Optional[Dict[str, Any]] = None,
     sans_version: str = "",
+    script_dir: Optional[Path] = None,
+    infer_untyped: bool = False,
+    max_infer_rows: int = 10_000,
 ) -> Dict[str, Any]:
     """
     Build schema lock payload for referenced CSV/inline_csv datasources.
-    Types: from irdoc.column_types if present; else from schema_lock_used entry.
-    Path: from irdoc.datasources[name].path, normalized to /.
+    Types: from irdoc.column_types if present; else from schema_lock_used entry;
+    else if infer_untyped, from infer_csv_schema. Path: from irdoc.datasources[name].path, normalized to /.
     """
     from .ir import OpStep
+    from .schema_infer import (
+        INFERENCE_POLICY_VERSION,
+        infer_csv_schema,
+    )
 
     lock_entries = lock_by_name(schema_lock_used) if schema_lock_used else {}
     datasources_list: List[Dict[str, Any]] = []
@@ -94,6 +101,7 @@ def build_schema_lock(
         path_str = (ds.path or "").replace("\\", "/") or f"{name}.csv"
         columns_order: List[str] = []
         column_types: Dict[str, str] = {}
+        inference_meta: Dict[str, Any] = {}
 
         if ds.column_types:
             columns_order = list(ds.columns) if ds.columns else sorted(ds.column_types.keys())
@@ -110,7 +118,25 @@ def build_schema_lock(
                 if n:
                     column_types[n] = str(t).lower()
         else:
-            if ds.columns:
+            if infer_untyped:
+                if ds.kind == "csv":
+                    raw_path = ds.path or f"{name}.csv"
+                    resolved = Path(raw_path) if Path(raw_path).is_absolute() else (script_dir or Path.cwd()) / raw_path
+                    inferred_columns, rows_scanned, truncated = infer_csv_schema(
+                        path=resolved, content=None, max_rows=max_infer_rows
+                    )
+                else:
+                    inferred_columns, rows_scanned, truncated = infer_csv_schema(
+                        path=None, content=ds.inline_text or "", max_rows=max_infer_rows
+                    )
+                columns_order = [c["name"] for c in inferred_columns]
+                column_types = {c["name"]: c["type"] for c in inferred_columns}
+                inference_meta = {
+                    "inference_policy_version": INFERENCE_POLICY_VERSION,
+                    "rows_scanned": rows_scanned,
+                    "truncated": truncated,
+                }
+            elif ds.columns:
                 columns_order = list(ds.columns)
                 column_types = {c: "unknown" for c in columns_order}
 
@@ -118,13 +144,15 @@ def build_schema_lock(
             continue
 
         columns_payload = [{"name": c, "type": column_types.get(c, "unknown")} for c in columns_order]
-        datasources_list.append({
+        entry_dict: Dict[str, Any] = {
             "columns": columns_payload,
             "kind": ds.kind,
             "name": name,
             "path": path_str,
             "rules": {"extra_columns": "ignore", "missing_columns": "error"},
-        })
+        }
+        entry_dict.update(inference_meta)
+        datasources_list.append(entry_dict)
 
     created_by: Dict[str, str] = {"sans_version": sans_version, "git_sha": _git_sha()}
     return {
@@ -135,22 +163,27 @@ def build_schema_lock(
 
 
 def _canonical_lock_json(lock_dict: Dict[str, Any]) -> str:
-    """Canonical JSON for hashing: sort top-level keys; datasources list order preserved; each entry sorted by key."""
+    """Canonical JSON for hashing and for the written file. Sort top-level keys; datasources list order preserved.
+    Inference fields use defaults (0, 0, false) when absent so hashing is deterministic; written JSON still
+    distinguishes inferred (inference_policy_version=1, rows_scanned>0 or truncated) from pinned/lock (0, 0, false)."""
     created_by = lock_dict.get("created_by") or {}
     created_by = dict(sorted(created_by.items()))
     datasources = lock_dict.get("datasources") or []
     out_entries = []
     for entry in datasources:
-        # Preserve column order; sort other keys
+        # Fixed defaults when absent: hashing deterministic; 0/0/false = not inferred, 1/N/bool = inferred
         columns = entry.get("columns") or []
         rules = entry.get("rules") or {}
         rules = dict(sorted(rules.items()))
         out_entries.append({
             "columns": columns,
+            "inference_policy_version": entry.get("inference_policy_version", 0),
             "kind": entry.get("kind", "csv"),
             "name": entry.get("name", ""),
             "path": entry.get("path", ""),
+            "rows_scanned": entry.get("rows_scanned", 0),
             "rules": rules,
+            "truncated": entry.get("truncated", False),
         })
     payload = {
         "created_by": created_by,

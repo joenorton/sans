@@ -259,16 +259,22 @@ def compile_sans_script(
     file_name: str = "<string>",
     tables: Optional[Set[str]] = None,
     initial_table_facts: Optional[Dict[str, Dict[str, Any]]] = None,
+    skip_type_validation: bool = False,
 ) -> IRDoc:
     """
     Compile a .sans script into an IRDoc.
+    When skip_type_validation is True, skip validate_script (no type-checking of filter/derive/etc.);
+    used for schema lock generation so we can discover datasources without needing typed pinning.
     """
     try:
         script = parse_sans_script(text, file_name)
-        from .sans_script.validate import validate_script
-        warnings = validate_script(script, tables or set())
+        if not skip_type_validation:
+            from .sans_script.validate import validate_script
+            warnings = validate_script(script, tables or set())
+        else:
+            warnings = []
         steps, references = lower_script(script, file_name)
-        
+
         # Add warnings as UnknownBlockSteps with warning severity
         for w in warnings:
             steps.append(UnknownBlockStep(
@@ -359,6 +365,26 @@ def check_script(
     validated_table_facts = initial_irdoc.validate()
     return IRDoc(steps=initial_irdoc.steps, tables=initial_irdoc.tables, table_facts=validated_table_facts)
 
+def _referenced_datasource_names(irdoc: Any) -> set:
+    """Return set of datasource names referenced by datasource steps (csv or inline_csv)."""
+    from .ir import OpStep
+    out = set()
+    for step in irdoc.steps:
+        if not isinstance(step, OpStep) or getattr(step, "op", None) != "datasource":
+            continue
+        params = getattr(step, "params", None) or {}
+        if params.get("kind") not in ("csv", "inline_csv"):
+            continue
+        name = params.get("name")
+        if not name:
+            outputs = getattr(step, "outputs", None) or []
+            if outputs and outputs[0].startswith("__datasource__"):
+                name = outputs[0].replace("__datasource__", "", 1)
+        if name:
+            out.add(name)
+    return out
+
+
 def emit_check_artifacts(
     text: str,
     file_name: str = "<string>",
@@ -375,10 +401,15 @@ def emit_check_artifacts(
     allow_include_escape: bool = False,
     emit_vars_graph: bool = True,
     legacy_sas: bool = False,
+    lock_generation_only: bool = False,
+    schema_lock: Optional[Dict[str, Any]] = None,
+    schema_lock_path_resolved: Optional[Path] = None,
 ) -> Tuple[IRDoc, Dict[str, Any]]:
     """
     Compile + validate, then emit plan and report artifacts.
     Returns the IRDoc (validated if possible) and report dict.
+    When lock_generation_only is True: skip type validation and irdoc.validate() so we can get
+    an IRDoc for schema lock generation without needing typed datasources; also skip infer_table_schema_types.
     """
     out_path = Path(out_dir).resolve()
     out_path.mkdir(parents=True, exist_ok=True)
@@ -400,12 +431,16 @@ def emit_check_artifacts(
             pass
 
     compile_start = perf_counter()
+    # When schema_lock is provided we will enrich irdoc after compile; skip AST type validation
+    # so we don't fail on untyped datasources before enrichment, then irdoc.validate() will type-check.
+    skip_ast_type_validation = lock_generation_only or (schema_lock is not None)
     if use_sans_script:
         irdoc = compile_sans_script(
             text=text,
             file_name=file_name,
             tables=tables,
             initial_table_facts=initial_table_facts,
+            skip_type_validation=skip_ast_type_validation,
         )
     else:
         irdoc = compile_script(
@@ -423,8 +458,65 @@ def emit_check_artifacts(
     validation_error: Optional[UnknownBlockStep] = None
     validate_ms: Optional[int] = None
     diagnostics: List[Dict[str, Any]] = []
+    schema_lock_applied: List[str] = []
+    schema_lock_missing: List[str] = []
 
-    if strict:
+    # Apply schema lock to compile-time type env when provided (so filter/derive get correct types).
+    if schema_lock is not None and not lock_generation_only and use_sans_script:
+        from .ir import DatasourceDecl
+        from .schema_lock import lock_by_name, lock_entry_to_column_types
+        from .ir import Loc
+        referenced = _referenced_datasource_names(irdoc)
+        lock_map = lock_by_name(schema_lock)
+        # Ungated refs: referenced datasources that have no pinned column_types
+        untyped_refs = [
+            n for n in referenced
+            if irdoc.datasources.get(n) and not (irdoc.datasources[n].column_types)
+        ]
+        missing = [n for n in untyped_refs if n not in lock_map]
+        if missing:
+            validation_error = UnknownBlockStep(
+                code="E_SCHEMA_LOCK_MISSING_DS",
+                message=f"Schema lock missing datasource(s): {', '.join(sorted(missing))}",
+                loc=Loc(file_name, 1, 1),
+            )
+            schema_lock_missing = sorted(missing)
+        else:
+            # Enrich irdoc.datasources with lock types so irdoc.validate() / infer_table_schema_types see them
+            new_datasources: Dict[str, Any] = {}
+            for name, ds in irdoc.datasources.items():
+                if ds.column_types:
+                    new_datasources[name] = ds
+                elif name in lock_map:
+                    entry = lock_map[name]
+                    col_types = lock_entry_to_column_types(entry)
+                    lock_cols = [c["name"] for c in (entry.get("columns") or []) if c.get("name")]
+                    columns = ds.columns if ds.columns else (lock_cols if lock_cols else None)
+                    new_datasources[name] = DatasourceDecl(
+                        kind=ds.kind,
+                        path=ds.path,
+                        columns=columns,
+                        column_types=col_types,
+                        inline_text=ds.inline_text,
+                        inline_sha256=ds.inline_sha256,
+                    )
+                    schema_lock_applied.append(name)
+                else:
+                    new_datasources[name] = ds
+            irdoc = IRDoc(
+                steps=irdoc.steps,
+                tables=irdoc.tables,
+                table_facts=irdoc.table_facts,
+                datasources=new_datasources,
+            )
+            schema_lock_applied = sorted(schema_lock_applied)
+
+    if lock_generation_only:
+        # No irdoc.validate() or type inference; we only need irdoc for datasource discovery
+        validate_ms = 0
+    elif validation_error is not None:
+        validate_ms = 0
+    elif strict:
         validate_start = perf_counter()
         try:
             validated_table_facts = irdoc.validate()
@@ -490,12 +582,15 @@ def emit_check_artifacts(
     effects_path = out_path / ARTIFACTS / "table.effects.json"
     effects = build_table_effects(irdoc)
     write_table_effects_json(effects, effects_path)
-    from sans.type_infer import infer_table_schema_types, schema_to_strings
-    schema_types = infer_table_schema_types(irdoc)
-    schema_tables: Dict[str, Dict[str, str]] = {}
-    for name in sorted(schema_types.keys()):
-        schema_tables[name] = schema_to_strings(schema_types[name])
-    schema_payload = {"schema_version": "0.1", "tables": schema_tables}
+    if lock_generation_only:
+        schema_payload = {"schema_version": "0.1", "tables": {}}
+    else:
+        from sans.type_infer import infer_table_schema_types, schema_to_strings
+        schema_types = infer_table_schema_types(irdoc)
+        schema_tables = {}
+        for name in sorted(schema_types.keys()):
+            schema_tables[name] = schema_to_strings(schema_types[name])
+        schema_payload = {"schema_version": "0.1", "tables": schema_tables}
     schema_path = out_path / ARTIFACTS / "schema.evidence.json"
     schema_path.write_text(json.dumps(schema_payload, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -569,6 +664,13 @@ def emit_check_artifacts(
             "execute_ms": None,
         },
     }
+
+    if schema_lock_path_resolved is not None:
+        report["schema_lock_used_path"] = str(Path(schema_lock_path_resolved).resolve())
+        from .schema_lock import compute_lock_sha256
+        report["schema_lock_sha256"] = compute_lock_sha256(schema_lock) if schema_lock else None
+        report["schema_lock_applied_datasources"] = schema_lock_applied
+        report["schema_lock_missing_datasources"] = schema_lock_missing
 
     report["report_sha256"] = compute_report_sha256(report, out_path)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
