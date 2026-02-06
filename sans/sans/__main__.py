@@ -114,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
     run_parser.add_argument("--allow-include-escape", action="store_true", default=False)
     run_parser.add_argument("--legacy-sas", action="store_true", default=False, help="Enable legacy SAS expression operators for .sas")
+    run_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json to enforce when ingesting datasources")
+    run_parser.add_argument("--emit-schema-lock", metavar="path", default=None, help="After successful run, write schema.lock.json to this path")
 
     validate_parser = subparsers.add_parser("validate", help="Validate tables against a profile")
     validate_parser.add_argument("--profile", required=True, help="Validation profile (e.g., sdtm)")
@@ -122,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_parser = subparsers.add_parser("verify", help="Verify a repro bundle")
     verify_parser.add_argument("bundle", help="Path to report.json or bundle directory")
+    verify_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json; verify its hash matches report.schema_lock_sha256")
 
     fmt_parser = subparsers.add_parser("fmt", help="Format a .sans script")
     fmt_parser.add_argument("script", help="Path to the script file or directory")
@@ -159,6 +162,22 @@ def main(argv: list[str] | None = None) -> int:
             actual_sha = compute_report_sha256(report, bundle_root)
             if actual_sha != expected_sha:
                 print("failed: report hash mismatch")
+                return 1
+
+        if getattr(args, "schema_lock", None):
+            from .schema_lock import load_schema_lock, compute_lock_sha256
+            lock_path = Path(args.schema_lock)
+            if not lock_path.exists():
+                print(f"failed: schema lock file not found: {lock_path}")
+                return 1
+            lock_dict = load_schema_lock(lock_path)
+            lock_sha = compute_lock_sha256(lock_dict)
+            report_lock_sha = report.get("schema_lock_sha256")
+            if report_lock_sha is None:
+                print("failed: report has no schema_lock_sha256 (run did not use or emit a schema lock)")
+                return 1
+            if lock_sha != report_lock_sha:
+                print("failed: schema lock hash mismatch")
                 return 1
 
         # Check inputs (bundle-relative paths only)
@@ -273,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
             return _write_failed_report(out_dir, str(exc))
 
         include_roots = [Path(p) for p in args.include_root] if args.include_root else None
+        schema_lock_path = Path(args.schema_lock) if args.schema_lock else None
+        emit_schema_lock_path = Path(args.emit_schema_lock) if args.emit_schema_lock else None
         report = run_script(
             text=text,
             file_name=str(script_path),
@@ -284,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
             allow_absolute_includes=args.allow_absolute_include,
             allow_include_escape=args.allow_include_escape,
             legacy_sas=args.legacy_sas,
+            schema_lock_path=schema_lock_path,
+            emit_schema_lock_path=emit_schema_lock_path,
         )
 
         status = report.get("status")

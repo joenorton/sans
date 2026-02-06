@@ -25,7 +25,7 @@ def test_csv_header_inference(tmp_path: Path) -> None:
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
     script = (
         "# sans 0.1\n"
-        f"datasource lb = csv(\"{csv_path.as_posix()}\")\n"
+        f"datasource lb = csv(\"{csv_path.as_posix()}\", columns(A:int, B:int))\n"
         "table out = from(lb) select A, B\n"
         "save out to \"out.csv\"\n"
     )
@@ -39,7 +39,10 @@ def test_csv_header_inference(tmp_path: Path) -> None:
 def test_inline_csv_header_inference(tmp_path: Path) -> None:
     script = (
         "# sans 0.1\n"
-        "datasource raw = inline_csv(\"a,b\\n1,2\\n\")\n"
+        "datasource raw = inline_csv columns(a:int, b:int) do\n"
+        "  a,b\n"
+        "  1,2\n"
+        "end\n"
         "table out = from(raw) select a, b\n"
         "save out to \"out.csv\"\n"
     )
@@ -55,7 +58,7 @@ def test_pinned_columns_validation(tmp_path: Path) -> None:
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
     script = (
         "# sans 0.1\n"
-        f"datasource lb = csv(\"{csv_path.as_posix()}\", columns(A,C))\n"
+        f"datasource lb = csv(\"{csv_path.as_posix()}\", columns(A:int, C:int))\n"
         "table out = from(lb) select A, C\n"
         "save out to \"out.csv\"\n"
     )
@@ -73,7 +76,7 @@ def test_vars_graph_uses_inferred_schema(tmp_path: Path, caplog) -> None:
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
     script = (
         "# sans 0.1\n"
-        f"datasource lb = csv(\"{csv_path.as_posix()}\")\n"
+        f"datasource lb = csv(\"{csv_path.as_posix()}\", columns(A:int, B:int))\n"
         "table out = from(lb) do\n"
         "  filter A == null\n"
         "  rename(A -> A1)\n"

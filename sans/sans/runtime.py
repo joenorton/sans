@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 import csv
 import re
 from time import perf_counter
@@ -307,6 +307,7 @@ def _load_csv_with_header_typed(
     path: Path,
     column_types: Dict[str, Type],
     sample_cap: int = COERCE_SAMPLE_LIMIT,
+    required_columns: Optional[Iterable[str]] = None,
 ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f)
@@ -317,6 +318,13 @@ def _load_csv_with_header_typed(
 
         if not headers:
             return [], [], None
+
+        if required_columns is not None:
+            required_set = set(required_columns)
+            header_set = set(headers)
+            missing = required_set - header_set
+            if missing:
+                return [], list(headers), {"missing_columns": sorted(missing)}
 
         rows, summary = _coerce_csv_rows(reader, headers, column_types, sample_cap)
         return rows, headers, summary
@@ -352,6 +360,7 @@ def _parse_inline_csv_text_typed(
     inline_text: str,
     column_types: Dict[str, Type],
     sample_cap: int = COERCE_SAMPLE_LIMIT,
+    required_columns: Optional[Iterable[str]] = None,
 ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
     from io import StringIO
     buf = StringIO(inline_text.strip())
@@ -362,6 +371,12 @@ def _parse_inline_csv_text_typed(
         return [], [], None
     if not headers:
         return [], [], None
+    if required_columns is not None:
+        required_set = set(required_columns)
+        header_set = set(headers)
+        missing = required_set - header_set
+        if missing:
+            return [], list(headers), {"missing_columns": sorted(missing)}
     rows_d, summary = _coerce_csv_rows(reader, headers, column_types, sample_cap)
     return rows_d, headers, summary
 
@@ -1435,6 +1450,7 @@ def execute_plan(
     out_dir: Path,
     output_format: str = "csv",
     outputs_base: Optional[Path] = None,
+    schema_lock: Optional[Dict[str, Any]] = None,
 ) -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
@@ -1444,6 +1460,11 @@ def execute_plan(
     datasource_schemas: Dict[str, List[str]] = {}
     datasource_evidence: List[Dict[str, Any]] = []
     coercion_diagnostics: List[Dict[str, Any]] = []
+
+    lock_by_name: Dict[str, Dict[str, Any]] = {}
+    if schema_lock:
+        from .schema_lock import lock_by_name as _lock_by_name
+        lock_by_name = _lock_by_name(schema_lock)
 
     try:
         tables: Dict[str, List[Dict[str, Any]]] = {}
@@ -1512,16 +1533,30 @@ def execute_plan(
                     pinned_cols = None
                 ds_decl = ir_doc.datasources.get(ds_name) if isinstance(ds_name, str) else None
                 column_types = ds_decl.column_types if ds_decl and ds_decl.column_types else None
+                required_columns: Optional[List[str]] = None
+                if not column_types and ds_name and lock_by_name and ds_name in lock_by_name:
+                    from .schema_lock import lock_entry_to_column_types, lock_entry_required_columns
+                    lock_entry = lock_by_name[ds_name]
+                    column_types = lock_entry_to_column_types(lock_entry)
+                    required_columns = lock_entry_required_columns(lock_entry)
                 data_dir = out_dir / INPUTS_DATA
                 data_dir.mkdir(parents=True, exist_ok=True)
                 materialized_path = data_dir / f"{ds_name}.csv"
                 if kind == "inline_csv":
                     inline_text = params.get("inline_text") or ""
                     if column_types:
-                        rows_d, headers, summary = _parse_inline_csv_text_typed(inline_text, column_types)
+                        rows_d, headers, summary = _parse_inline_csv_text_typed(
+                            inline_text, column_types, required_columns=required_columns
+                        )
                     else:
                         rows_d, headers = _parse_inline_csv_text(inline_text)
                         summary = None
+                    if summary and summary.get("missing_columns"):
+                        raise RuntimeFailure(
+                            "E_SCHEMA_MISSING_COL",
+                            f"Datasource '{ds_name}' missing columns: {', '.join(summary['missing_columns'])}.",
+                            _loc_to_dict(step.loc),
+                        )
                     if pinned_cols is not None and headers != pinned_cols:
                         raise RuntimeFailure(
                             "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
@@ -1597,10 +1632,18 @@ def execute_plan(
                         import shutil
                         shutil.copy2(path, materialized_path)
                         if column_types:
-                            rows_d, headers, summary = _load_csv_with_header_typed(path, column_types)
+                            rows_d, headers, summary = _load_csv_with_header_typed(
+                                path, column_types, required_columns=required_columns
+                            )
                         else:
                             rows_d, headers = _load_csv_with_header(path)
                             summary = None
+                        if summary and summary.get("missing_columns"):
+                            raise RuntimeFailure(
+                                "E_SCHEMA_MISSING_COL",
+                                f"Datasource '{ds_name}' missing columns: {', '.join(summary['missing_columns'])}.",
+                                _loc_to_dict(step.loc),
+                            )
                         if pinned_cols is not None and headers != pinned_cols:
                             raise RuntimeFailure(
                                 "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
@@ -1934,6 +1977,25 @@ def execute_plan(
         )
 
 
+def _referenced_csv_datasource_names(irdoc: IRDoc) -> set:
+    """Return set of datasource names that are referenced by datasource steps (csv or inline_csv)."""
+    out = set()
+    for step in irdoc.steps:
+        if not isinstance(step, OpStep) or getattr(step, "op", None) != "datasource":
+            continue
+        params = step.params or {}
+        if params.get("kind") not in ("csv", "inline_csv"):
+            continue
+        name = params.get("name")
+        if not name:
+            outputs = step.outputs or []
+            if outputs and outputs[0].startswith("__datasource__"):
+                name = outputs[0].replace("__datasource__", "", 1)
+        if name:
+            out.add(name)
+    return out
+
+
 def run_script(
     text: str,
     file_name: str,
@@ -1945,6 +2007,8 @@ def run_script(
     allow_absolute_includes: bool = False,
     allow_include_escape: bool = False,
     legacy_sas: bool = False,
+    schema_lock_path: Optional[Path] = None,
+    emit_schema_lock_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     irdoc, report = emit_check_artifacts(
         text=text,
@@ -1966,6 +2030,11 @@ def run_script(
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report
 
+    schema_lock: Optional[Dict[str, Any]] = None
+    if schema_lock_path and Path(schema_lock_path).exists():
+        from .schema_lock import load_schema_lock
+        schema_lock = load_schema_lock(Path(schema_lock_path))
+
     out_path = Path(out_dir).resolve()
     ensure_bundle_layout(out_path)
 
@@ -1984,6 +2053,28 @@ def run_script(
     # Materialize bindings to inputs/data/<logical_name> (logical name only)
     bindings_in: Dict[str, str] = {}
     try:
+        referenced = _referenced_csv_datasource_names(irdoc)
+        for ds_name in referenced:
+            ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+            if not ds or ds.kind not in ("csv", "inline_csv"):
+                continue
+            if ds.column_types:
+                continue
+            if not schema_lock:
+                raise RuntimeFailure(
+                    "E_SCHEMA_REQUIRED",
+                    f"Datasource '{ds_name}' has no typed columns. Provide --schema-lock or typed columns(...).",
+                    None,
+                )
+            from .schema_lock import lock_by_name
+            lock_map = lock_by_name(schema_lock)
+            if ds_name not in lock_map:
+                raise RuntimeFailure(
+                    "E_SCHEMA_REQUIRED",
+                    f"Datasource '{ds_name}' has no typed columns and is not in schema lock. Provide --schema-lock with entry for '{ds_name}' or typed columns(...).",
+                    None,
+                )
+
         if bindings:
             data_dir = out_path / INPUTS_DATA
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -2008,6 +2099,7 @@ def run_script(
             out_path,
             output_format=output_format,
             outputs_base=out_path / OUTPUTS,
+            schema_lock=schema_lock,
         )
     except RuntimeFailure as err:
         report["runtime"] = {"status": "failed", "timing": {"execute_ms": None}}
@@ -2192,6 +2284,16 @@ def run_script(
         "path": evidence_rel,
         "sha256": compute_artifact_hash(evidence_path) or "",
     })
+
+    if emit_schema_lock_path and result.status in ("ok", "ok_warnings"):
+        from .schema_lock import build_schema_lock, write_schema_lock, compute_lock_sha256
+        referenced = _referenced_csv_datasource_names(irdoc)
+        lock_dict = build_schema_lock(irdoc, referenced, schema_lock_used=schema_lock, sans_version=_engine_version)
+        write_schema_lock(lock_dict, Path(emit_schema_lock_path))
+        report["schema_lock_sha256"] = compute_lock_sha256(lock_dict)
+    elif schema_lock:
+        from .schema_lock import compute_lock_sha256
+        report["schema_lock_sha256"] = compute_lock_sha256(schema_lock)
 
     report_path = out_path / "report.json"
     report["report_sha256"] = compute_report_sha256(report, bundle_root)

@@ -1288,7 +1288,7 @@ def test_run_cast_sans(tmp_path):
     import json
     script = (
         "# sans 0.1\n"
-        "datasource in = inline_csv do\n"
+        "datasource in = inline_csv columns(a:int, b:decimal) do\n"
         "  a,b\n"
         "  1,2.5\n"
         "  3,4\n"

@@ -18,6 +18,7 @@ Top-level fields
 - `outputs[]`: list of `{name, path, sha256, rows?, columns?}` (user-facing table files only). Path under `outputs/`; subpaths preserved. **sha256 required** (non-null).
 - `plan_path`: bundle-relative path to plan (e.g. `artifacts/plan.ir.json`).
 - `report_sha256`: SHA-256 of the canonical report payload (used by `sans verify` for self-check).
+- `schema_lock_sha256`: (optional) SHA-256 of the canonical schema lock JSON when the run used or emitted a schema lock; used by `sans verify --schema-lock` to bind the run to a lock file.
 - `engine`: `{name, version}`.
 - `settings`: effective settings used for this run.
 - `timing`: `{compile_ms, validate_ms, execute_ms}` (values may be `null`).

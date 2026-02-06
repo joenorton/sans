@@ -94,6 +94,12 @@ This document lists the stable error codes used by SANS.
 *   `SANS_RUNTIME_XPT_LENGTH_EXCEEDED`: Char length exceeds XPT policy cap.
 *   `SANS_RUNTIME_XPT_LABEL_FORMAT_IGNORED`: XPT labels/formats ignored (warning).
 
+### Schema Lock / CSV Ingestion (`E_*`)
+
+*   `E_SCHEMA_REQUIRED`: A referenced CSV datasource has no typed columns and no entry in the provided schema lock. Provide `--schema-lock` or typed `columns(...)` in the datasource declaration.
+*   `E_SCHEMA_MISSING_COL`: Input CSV is missing one or more columns required by the schema lock.
+*   `E_CSV_COERCE`: A locked or typed column value could not be coerced to the expected type (see `coercion_diagnostics` in runtime.evidence.json).
+
 ## Canonical Examples
 
 ### Macro Error (Refused)

@@ -20,7 +20,7 @@ this contract is designed to be:
 
 a bundle is a directory containing:
 
-* `report.json` at bundle root (only file at root besides directory structure)
+* `report.json` at bundle root (only file at root besides directory structure). When a run uses or emits a schema lock, the report may include `schema_lock_sha256` (see docs/SCHEMA_LOCK_V0.md).
 * `inputs/source/` — analysis script, preprocessed.sas (if any), expanded.sans (if any)
 * `inputs/data/` — materialized datasource files (by logical name)
 * `artifacts/` — plan.ir.json, schema.evidence.json, graph.json, vars.graph.json, table.effects.json, registry.candidate.json, runtime.evidence.json

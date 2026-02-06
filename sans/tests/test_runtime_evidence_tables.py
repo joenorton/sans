@@ -25,7 +25,7 @@ def _run(script: str, out_dir: Path) -> dict:
 def test_constant_flip_and_non_constant_column(tmp_path: Path):
     base = (
         "# sans 0.1\n"
-        "datasource in = inline_csv columns(id, A1C) do\n"
+        "datasource in = inline_csv columns(id:int, A1C:decimal) do\n"
         "  id,A1C\n"
         "  1,7.1\n"
         "  2,6.8\n"
@@ -54,7 +54,7 @@ def test_constant_flip_and_non_constant_column(tmp_path: Path):
 def test_runtime_evidence_deterministic(tmp_path: Path):
     script = (
         "# sans 0.1\n"
-        "datasource in = inline_csv columns(id, val) do\n"
+        "datasource in = inline_csv columns(id:int, val:int) do\n"
         "  id,val\n"
         "  1,10\n"
         "  2,20\n"
@@ -70,7 +70,7 @@ def test_runtime_evidence_deterministic(tmp_path: Path):
 def test_runtime_evidence_outputs_deduped(tmp_path: Path):
     script = (
         "# sans 0.1\n"
-        "datasource in = inline_csv columns(id, val) do\n"
+        "datasource in = inline_csv columns(id:int, val:int) do\n"
         "  id,val\n"
         "  1,10\n"
         "  2,20\n"
@@ -104,7 +104,7 @@ def test_unique_cap_behavior(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     small_cfg = EvidenceConfig(unique_cap=5, topk=5, include_top_values=True, sample_cap=1000)
     monkeypatch.setattr("sans.runtime.DEFAULT_EVIDENCE_CONFIG", small_cfg)
 
-    lines = ["# sans 0.1", "datasource in = inline_csv columns(id) do", "  id"]
+    lines = ["# sans 0.1", "datasource in = inline_csv columns(id:int) do", "  id"]
     for i in range(1, 15):
         lines.append(f"  {i}")
     lines.extend([
