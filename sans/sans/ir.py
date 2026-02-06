@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, List, Dict
 
 from ._loc import Loc
+from .type_infer import TypeInferenceError, infer_table_schema_types
+from .types import Type
 
 
 # -----------------------------------------------------------------------------
@@ -356,6 +358,7 @@ class DatasourceDecl:
     kind: str                 # "csv" | "inline_csv"
     path: Optional[str] = None
     columns: Optional[list[str]] = None
+    column_types: Optional[dict[str, Type]] = None
     inline_text: Optional[str] = None   # normalized csv text for inline_csv
     inline_sha256: Optional[str] = None
 
@@ -616,5 +619,15 @@ class IRDoc:
                             loc=step.loc,
                         )
                     current_table_facts[output_table] = TableFact(sorted_by=output_sorted_by)
+
+        # Enforce strict expression typing
+        try:
+            infer_table_schema_types(self)
+        except TypeInferenceError as err:
+            raise UnknownBlockStep(
+                code="E_TYPE",
+                message=err.message,
+                loc=err.loc or Loc("<string>", 1, 1),
+            )
 
         return current_table_facts

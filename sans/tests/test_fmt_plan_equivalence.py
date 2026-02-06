@@ -34,11 +34,13 @@ def _compile_plan(text: str, file_name: str) -> dict:
                 kind="csv",
                 path=ast_ds.path,
                 columns=ast_ds.columns,
+                column_types=ast_ds.column_types,
             )
         elif ast_ds.kind == "inline_csv":
             ir_ds = DatasourceDecl(
                 kind="inline_csv",
                 columns=ast_ds.columns,
+                column_types=ast_ds.column_types,
                 inline_text=ast_ds.inline_text,
                 inline_sha256=ast_ds.inline_sha256,
             )

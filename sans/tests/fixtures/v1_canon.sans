@@ -1,5 +1,5 @@
 # sans 0.1
-datasource in = inline_csv do
+datasource in = inline_csv columns(a:int, b:int) do
   a,b
   6,7
   3,2

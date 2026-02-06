@@ -9,6 +9,8 @@ from .ast import (
     TableTransform, DatasourceDeclaration, SaveStmt, AssertStmt,
 )
 from .errors import SansScriptError
+from sans.types import Type
+from sans.type_infer import TypeInferenceError, infer_expr_type
 
 
 def _is_const_literal(val: Any) -> bool:
@@ -25,8 +27,9 @@ class SemanticValidator:
         self.script = script
         self.tables: Set[str] = set(initial_tables)
         self.datasources: Dict[str, DatasourceDeclaration] = {} # New: track datasources
-        self.table_schemas: Dict[str, List[str]] = {}
+        self.table_schemas: Dict[str, Dict[str, Type]] = {}
         self.scalars: Dict[str, int] = {}  # name -> line_defined
+        self.scalar_types: Dict[str, Type] = {}
         self.used_scalars: Set[str] = set()
         self.kinds: Dict[str, str] = {}  # name -> 'scalar' | 'table'
         self.warnings: List[Dict[str, Any]] = []
@@ -50,8 +53,9 @@ class SemanticValidator:
     def _validate_stmt(self, stmt: SansScriptStmt):
         if isinstance(stmt, LetBinding):
             self._check_kind_lock(stmt.name, 'scalar', stmt.span.start)
-            self._validate_scalar_expr(stmt.expr, stmt.span.start)
+            expr_type = self._validate_scalar_expr(stmt.expr, stmt.span.start)
             self.scalars[stmt.name] = stmt.span.start
+            self.scalar_types[stmt.name] = expr_type
             self.kinds[stmt.name] = 'scalar'
         elif isinstance(stmt, ConstDecl):
             for name, val in stmt.bindings.items():
@@ -63,6 +67,11 @@ class SemanticValidator:
                         line=stmt.span.start,
                     )
                 self.scalars[name] = stmt.span.start
+                self.scalar_types[name] = Type.UNKNOWN if val is None else Type.UNKNOWN
+                try:
+                    self.scalar_types[name] = infer_expr_type({"type": "lit", "value": val}, {})
+                except TypeInferenceError as err:
+                    raise SansScriptError(code=err.code, message=err.message, line=stmt.span.start)
                 self.kinds[name] = 'scalar'
         elif isinstance(stmt, DatasourceDeclaration):
             self._check_kind_lock(stmt.name, 'datasource', stmt.span.start)
@@ -89,7 +98,14 @@ class SemanticValidator:
                     line=stmt.span.start,
                 )
         elif isinstance(stmt, AssertStmt):
-            self._validate_scalar_expr(stmt.predicate, stmt.span.start, None)
+            pred_type = self._validate_scalar_expr(stmt.predicate, stmt.span.start, None)
+            if pred_type != Type.BOOL:
+                code = "E_TYPE_UNKNOWN" if pred_type == Type.UNKNOWN else "E_TYPE"
+                raise SansScriptError(
+                    code=code,
+                    message=f"Assert predicate must be bool, got {pred_type.value}.",
+                    line=stmt.span.start,
+                )
 
     def _check_kind_lock(self, name: str, kind: str, line: int):
         if name in self.kinds and self.kinds[name] != kind:
@@ -99,28 +115,34 @@ class SemanticValidator:
                 line=line
             )
 
-    def _validate_table_expr(self, expr: TableExpr) -> Optional[List[str]]:
-        """Returns the list of column names produced by this expression if known."""
+    def _validate_table_expr(self, expr: TableExpr) -> Optional[Dict[str, Type]]:
+        """Returns the column->type mapping produced by this expression if known."""
         if isinstance(expr, FromExpr):
             if expr.source in self.datasources:
                 expr.source_kind = "datasource"
                 # If datasource has explicit columns, use them as schema
-                if self.datasources[expr.source].columns:
-                    return self.datasources[expr.source].columns
+                ds = self.datasources[expr.source]
+                if ds.columns:
+                    schema: Dict[str, Type] = {}
+                    for col in ds.columns:
+                        if ds.column_types and col in ds.column_types:
+                            schema[col] = ds.column_types[col]
+                        else:
+                            schema[col] = Type.UNKNOWN
+                    return schema
 
                 # Infer inline_csv headers when available
-                ds = self.datasources[expr.source]
                 if ds.kind == "inline_csv" and ds.inline_text:
                     reader = csv.reader(StringIO(ds.inline_text.strip()))
                     try:
                         headers = next(reader)
                     except StopIteration:
                         headers = []
-                    return headers
+                    return {c: Type.UNKNOWN for c in headers}
 
                 # Default schema for demo purposes or unknown datasources
                 if expr.source == "in": # Special handling for demo.sans
-                    return ["a", "b", "c"]
+                    return {c: Type.UNKNOWN for c in ["a", "b", "c"]}
                 return None # Schema unknown for other external sources without declaration
             if expr.source in self.tables:
                 expr.source_kind = "table"
@@ -173,10 +195,10 @@ class SemanticValidator:
                 for v in var_cols:
                     for s in stats:
                         produced.append(f"{v}_{s}")
-                return produced
+                return {c: Type.UNKNOWN for c in produced}
         return None
 
-    def _validate_transform(self, transform: TableTransform, schema: Optional[List[str]]) -> Optional[List[str]]:
+    def _validate_transform(self, transform: TableTransform, schema: Optional[Dict[str, Type]]) -> Optional[Dict[str, Type]]:
         kind = transform.kind
         params = transform.params
         line = transform.span.start
@@ -190,9 +212,9 @@ class SemanticValidator:
                             code="E_UNKNOWN_COLUMN",
                             message=f"Column '{col}' is not produced by the preceding operation.",
                             line=line,
-                            hint=f"Available columns: {', '.join(schema)}"
+                            hint=f"Available columns: {', '.join(schema.keys())}"
                         )
-            return keep
+            return {c: schema.get(c, Type.UNKNOWN) for c in keep} if schema is not None else None
         elif kind == "drop":
             drop = params.get("drop", [])
             if schema is not None:
@@ -203,19 +225,22 @@ class SemanticValidator:
                             "message": f"Attempting to drop non-existent column '{col}'.",
                             "line": line
                         })
-                return [c for c in schema if c not in drop]
+                return {c: t for c, t in schema.items() if c not in drop}
             return None
         elif kind == "filter":
-            self._validate_scalar_expr(params["predicate"], line, schema)
+            pred_type = self._validate_scalar_expr(params["predicate"], line, schema)
+            if pred_type != Type.BOOL:
+                code = "E_TYPE_UNKNOWN" if pred_type == Type.UNKNOWN else "E_TYPE"
+                raise SansScriptError(
+                    code=code,
+                    message=f"Filter predicate must be bool, got {pred_type.value}.",
+                    line=line,
+                )
             return schema
         elif kind in ("derive", "update!"):
             # Rule: Sequential evaluation, no cycles, no implicit overwrites
             # We track "new" columns created in this derive block
-            new_schema = list(schema) if schema is not None else [] # Start with empty schema if unknown
-            if new_schema is None:
-                # If schema is unknown, we can't do strict mutation checking
-                # but we can still validate scalar expressions assuming columns exist
-                pass
+            new_schema = dict(schema) if schema is not None else None
 
             for assign in params["assignments"]:
                 target = assign["target"]
@@ -225,7 +250,7 @@ class SemanticValidator:
                 # Enforce overwrite rules
                 if allow_overwrite:
                     # 'update!' assignment: target MUST exist
-                    if target not in new_schema:
+                    if new_schema is not None and target not in new_schema:
                         raise SansScriptError(
                             code="E_INVALID_UPDATE",
                             message=f"Attempted to update nonexistent column '{target}'. Use '{target} = ...' for new columns.",
@@ -233,7 +258,7 @@ class SemanticValidator:
                         )
                 else:
                     # Plain assignment: target MUST NOT exist
-                    if target in new_schema:
+                    if new_schema is not None and target in new_schema:
                         raise SansScriptError(
                             code="E_STRICT_MUTATION",
                             message=f"Column '{target}' already exists. Use 'update! {target} = ...' to overwrite.",
@@ -242,24 +267,23 @@ class SemanticValidator:
                 
                 # RHS sees columns created SO FAR in this block + previous schema
                 # Pass a copy of new_schema for scalar expr validation
-                self._validate_scalar_expr(expr, line, new_schema)
-                
-                if target not in new_schema:
-                    new_schema.append(target)
+                expr_type = self._validate_scalar_expr(expr, line, new_schema)
+                if new_schema is not None:
+                    new_schema[target] = expr_type
             return new_schema
         elif kind == "rename":
             mappings = params["mappings"]
             if schema is not None:
                 # rename(old -> new) is destructive
-                final_schema = []
+                final_schema: Dict[str, Type] = {}
                 old_cols_to_rename = set(mappings.keys())
                 
-                for c in schema:
+                for c, t in schema.items():
                     if c in old_cols_to_rename:
-                        final_schema.append(mappings[c])
+                        final_schema[mappings[c]] = t
                         old_cols_to_rename.remove(c) # Mark as successfully renamed
                     else:
-                        final_schema.append(c)
+                        final_schema[c] = t
                 
                 # Check if we tried to rename a non-existent column
                 if old_cols_to_rename: # if set is not empty
@@ -268,7 +292,7 @@ class SemanticValidator:
                         code="E_UNKNOWN_COLUMN",
                         message=f"Cannot rename non-existent column '{non_existent}'.",
                         line=line,
-                        hint=f"Available columns: {', '.join(schema)}"
+                        hint=f"Available columns: {', '.join(schema.keys())}"
                     )
                 return final_schema
             return None
@@ -282,8 +306,19 @@ class SemanticValidator:
                             code="E_UNKNOWN_COLUMN",
                             message=f"Cannot cast non-existent column '{col}'.",
                             line=line,
-                            hint=f"Available columns: {', '.join(schema)}",
+                            hint=f"Available columns: {', '.join(schema.keys())}",
                         )
+                    to = (c.get("to") or "").lower()
+                    if to == "int":
+                        schema[col] = Type.INT
+                    elif to == "decimal":
+                        schema[col] = Type.DECIMAL
+                    elif to == "str":
+                        schema[col] = Type.STRING
+                    elif to == "bool":
+                        schema[col] = Type.BOOL
+                    else:
+                        schema[col] = Type.UNKNOWN
             return schema
         return schema
 
@@ -291,14 +326,14 @@ class SemanticValidator:
         for entry in expr.entries:
             self._validate_scalar_expr(entry.value, entry.span.start)
 
-    def _validate_scalar_expr(self, expr: Any, line: int, schema: Optional[List[str]] = None):
+    def _validate_scalar_expr(self, expr: Any, line: int, schema: Optional[Dict[str, Type]] = None) -> Type:
         if not isinstance(expr, dict):
-            return
+            return Type.UNKNOWN
         etype = expr.get("type")
         if etype == "col":
             name = expr.get("name")
             if not isinstance(name, str):
-                return
+                return Type.UNKNOWN
             key = name.lower()
             if key in self.kinds and self.kinds[key] == 'scalar':
                 self.used_scalars.add(key)
@@ -320,7 +355,7 @@ class SemanticValidator:
                         code="E_UNKNOWN_COLUMN",
                         message=f"Column '{name}' is not in scope.",
                         line=line,
-                        hint=f"Available columns: {', '.join(schema)}"
+                        hint=f"Available columns: {', '.join(schema.keys())}"
                     )
         elif etype == "binop":
             self._validate_scalar_expr(expr.get("left"), line, schema)
@@ -368,6 +403,15 @@ class SemanticValidator:
 
             for arg in args:
                 self._validate_scalar_expr(arg, line, schema)
+        env: Dict[str, Type] = {}
+        if schema is not None:
+            env.update(schema)
+        env.update(self.scalar_types)
+        try:
+            return infer_expr_type(expr, env)
+        except TypeInferenceError as err:
+            raise SansScriptError(code=err.code, message=err.message, line=line)
+        return Type.UNKNOWN
 
 def validate_script(script: SansScript, initial_tables: Set[str]) -> List[Dict[str, Any]]:
     validator = SemanticValidator(script, initial_tables)

@@ -21,6 +21,7 @@ from .recognizer import (
 from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
 from .sans_script.ast import DatasourceDeclaration # New import
 from . import __version__ as _engine_version
+from .types import type_name
 
 
 from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
@@ -64,6 +65,12 @@ def _step_to_dict(step: Step) -> Dict[str, Any]:
     return {"kind": step.kind, "loc": _loc_to_dict(step.loc)}
 
 def _irdoc_to_dict(doc: IRDoc) -> Dict[str, Any]:
+    datasources: Dict[str, Any] = {}
+    for name, ds in doc.datasources.items():
+        entry: Dict[str, Any] = {"path": ds.path, "columns": ds.columns}
+        if ds.column_types:
+            entry["column_types"] = {k: type_name(ds.column_types[k]) for k in sorted(ds.column_types)}
+        datasources[name] = entry
     return {
         "steps": [_step_to_dict(s) for s in doc.steps],
         "tables": sorted(list(doc.tables)),
@@ -71,10 +78,7 @@ def _irdoc_to_dict(doc: IRDoc) -> Dict[str, Any]:
             name: {"sorted_by": fact.sorted_by}
             for name, fact in doc.table_facts.items()
         },
-        "datasources": {
-            name: {"path": ds.path, "columns": ds.columns}
-            for name, ds in doc.datasources.items()
-        }
+        "datasources": datasources,
     }
 
 def _error_to_dict(err: UnknownBlockStep) -> Dict[str, Any]:
@@ -307,11 +311,13 @@ def compile_sans_script(
                 kind="csv",
                 path=ast_ds.path,
                 columns=ast_ds.columns,
+                column_types=ast_ds.column_types,
             )
         elif ast_ds.kind == "inline_csv":
             ir_ds = DatasourceDecl(
                 kind="inline_csv",
                 columns=ast_ds.columns,
+                column_types=ast_ds.column_types,
                 inline_text=ast_ds.inline_text,
                 inline_sha256=ast_ds.inline_sha256,
             )
@@ -484,6 +490,14 @@ def emit_check_artifacts(
     effects_path = out_path / ARTIFACTS / "table.effects.json"
     effects = build_table_effects(irdoc)
     write_table_effects_json(effects, effects_path)
+    from sans.type_infer import infer_table_schema_types, schema_to_strings
+    schema_types = infer_table_schema_types(irdoc)
+    schema_tables: Dict[str, Dict[str, str]] = {}
+    for name in sorted(schema_types.keys()):
+        schema_tables[name] = schema_to_strings(schema_types[name])
+    schema_payload = {"schema_version": "0.1", "tables": schema_tables}
+    schema_path = out_path / ARTIFACTS / "schema.evidence.json"
+    schema_path.write_text(json.dumps(schema_payload, indent=2, sort_keys=True), encoding="utf-8")
 
     source_basename = Path(file_name).name or "script"
     source_dest = out_path / INPUTS_SOURCE / source_basename
@@ -513,6 +527,7 @@ def emit_check_artifacts(
     graph_rel = bundle_relative_path(graph_path, out_path)
     vars_graph_rel = bundle_relative_path(vars_graph_path, out_path)
     effects_rel = bundle_relative_path(effects_path, out_path)
+    schema_rel = bundle_relative_path(schema_path, out_path)
     source_rel = bundle_relative_path(source_dest, out_path)
     inputs_list: List[Dict[str, Any]] = [
         {"role": "source", "name": source_basename, "path": source_rel, "sha256": compute_input_hash(source_dest) or ""}
@@ -536,6 +551,7 @@ def emit_check_artifacts(
             {"name": "graph.json", "path": graph_rel, "sha256": compute_artifact_hash(graph_path) or ""},
             {"name": "vars.graph.json", "path": vars_graph_rel, "sha256": compute_artifact_hash(vars_graph_path) or ""},
             {"name": "table.effects.json", "path": effects_rel, "sha256": compute_artifact_hash(effects_path) or ""},
+            {"name": "schema.evidence.json", "path": schema_rel, "sha256": compute_artifact_hash(schema_path) or ""},
         ],
         "outputs": [],
         "plan_path": plan_rel,

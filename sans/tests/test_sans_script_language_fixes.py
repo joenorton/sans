@@ -126,7 +126,7 @@ def test_from_unknown_source_errors_with_known_lists():
 def test_uppercase_headers_parse_and_execute(tmp_path: Path):
     script = (
         "# sans 0.1\n"
-        "datasource raw = inline_csv columns(A,B) do\n"
+        "datasource raw = inline_csv columns(A:int, B:int) do\n"
         "  A,B\n"
         "  1,10\n"
         "  2,20\n"

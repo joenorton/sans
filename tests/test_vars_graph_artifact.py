@@ -25,7 +25,7 @@ def test_vars_graph_basic(tmp_path: Path) -> None:
     script = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv columns(a, b, c) do",
+            "datasource in = inline_csv columns(a:int, b:int, c:int) do",
             "a,b,c",
             "1,2,3",
             "2,3,4",
@@ -158,7 +158,7 @@ def test_vars_graph_ignores_loc(tmp_path: Path) -> None:
     script_a = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv columns(a, b) do",
+            "datasource in = inline_csv columns(a:int, b:int) do",
             "a,b",
             "1,2",
             "end",
@@ -170,7 +170,7 @@ def test_vars_graph_ignores_loc(tmp_path: Path) -> None:
         [
             "",
             "# sans 0.1",
-            "datasource   in   =   inline_csv   columns(a, b)   do",
+            "datasource   in   =   inline_csv   columns(a:int, b:int)   do",
             "a,b",
             "1,2",
             "end",
@@ -214,7 +214,7 @@ def test_filter_pass_through_edges_explicit(tmp_path: Path) -> None:
     script = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv columns(a, b) do",
+            "datasource in = inline_csv columns(a:int, b:int) do",
             "a,b",
             "1,2",
             "end",
@@ -236,7 +236,7 @@ def test_filter_pass_through_edges_after_select_infers_schema(tmp_path: Path) ->
     script = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv do",
+            "datasource in = inline_csv columns(a:int, b:int) do",
             "a,b",
             "1,2",
             "end",
@@ -260,7 +260,7 @@ def test_filter_predicate_change_affects_effects_not_vars_graph(tmp_path: Path) 
     script_a = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv columns(a, b) do",
+            "datasource in = inline_csv columns(a:int, b:int) do",
             "a,b",
             "1,2",
             "end",
@@ -287,7 +287,7 @@ def test_sort_order_change_updates_effects(tmp_path: Path) -> None:
     script_a = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv columns(a, b) do",
+            "datasource in = inline_csv columns(a:int, b:int) do",
             "a,b",
             "1,2",
             "end",
@@ -312,7 +312,7 @@ def test_vars_graph_chain_explicit(tmp_path: Path) -> None:
     script = "\n".join(
         [
             "# sans 0.1",
-            "datasource in = inline_csv columns(label, name, value) do",
+            "datasource in = inline_csv columns(label:string, name:string, value:int) do",
             "label,name,value",
             "A,foo,1",
             "B,bar,2",

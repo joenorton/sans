@@ -93,7 +93,10 @@ def test_demo_high_low_compute_table_evidence(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.chdir(demo_dir)
     ev = _run(script_text, tmp_path / "demo_low")
-    label_col = ev["tables"]["__t6__"]["columns"]["label"]
+    table_with_label = next(
+        name for name, info in ev["tables"].items() if "label" in (info.get("columns") or {})
+    )
+    label_col = ev["tables"][table_with_label]["columns"]["label"]
     assert label_col["constant_value"] == "LOW"
 
 

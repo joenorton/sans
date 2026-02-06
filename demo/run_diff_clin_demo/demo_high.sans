@@ -1,6 +1,6 @@
 # sans 0.1
 
-datasource lb = csv("lb.csv", columns(USUBJID, VISITNUM, LBDTC, LBTESTCD, LBORRES, LBSTRESN, LBSTRESU))
+datasource lb = csv("lb.csv", columns(USUBJID:string, VISITNUM:int, LBDTC:string, LBTESTCD:string, LBORRES:string, LBSTRESN:decimal, LBSTRESU:string))
 
 table sorted_high = from(lb) do
 	filter(LBTESTCD == "HBA1C")

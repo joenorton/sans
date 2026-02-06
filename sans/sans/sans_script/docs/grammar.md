@@ -89,6 +89,14 @@ optional schema pinning:
 datasource name = csv("path/to/file.csv", columns(a, b, c))
 ```
 
+typed schema pinning (optional):
+
+```
+datasource name = csv("path/to/file.csv", columns(a:int, b:string, c:decimal))
+```
+
+allowed type names: `null`, `bool`, `int`, `decimal`, `string` (`str` is accepted as an alias for `string`).
+
 rules:
 
 * datasource names live in a global file scope.

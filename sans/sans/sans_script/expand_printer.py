@@ -4,9 +4,10 @@ Deterministic, byte-stable output; kernel vocabulary only; one statement per ste
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from sans.ir import IRDoc, OpStep, UnknownBlockStep, is_ds_input, ds_name_from_input
+from sans.ir import IRDoc, OpStep, UnknownBlockStep, is_ds_input, ds_name_from_input, DatasourceDecl
+from sans.types import Type, type_name
 
 
 def _expr_to_string(node: Any) -> str:
@@ -74,7 +75,19 @@ def _sort_by_to_expanded(by: List[Dict[str, Any]]) -> str:
     return ", ".join(parts)
 
 
-def _step_to_expanded(step: OpStep) -> List[str]:
+def _format_columns(cols: List[str], column_types: Optional[Dict[str, Type]]) -> str:
+    if not cols:
+        return ""
+    parts: List[str] = []
+    for col in cols:
+        if column_types and col in column_types:
+            parts.append(f"{col}:{type_name(column_types[col])}")
+        else:
+            parts.append(col)
+    return ", ".join(parts)
+
+
+def _step_to_expanded(step: OpStep, datasources: Optional[Dict[str, DatasourceDecl]] = None) -> List[str]:
     """Emit one or more lines for this step (kernel-only, deterministic)."""
     lines: List[str] = []
     op = step.op
@@ -88,10 +101,11 @@ def _step_to_expanded(step: OpStep) -> List[str]:
     if op == "datasource":
         name = params.get("name", "")
         kind = params.get("kind", "csv")
+        ds_decl = datasources.get(name) if datasources else None
         if kind == "inline_csv":
-            path = params.get("path")
-            cols = params.get("columns") or []
-            cols_str = f", columns({', '.join(cols)})" if cols else ""
+            cols = ds_decl.columns if ds_decl and ds_decl.columns else (params.get("columns") or [])
+            column_types = ds_decl.column_types if ds_decl else None
+            cols_str = f" columns({_format_columns(cols, column_types)})" if cols else ""
             lines.append(f'datasource {name} = inline_csv{cols_str} do')
             inline = params.get("inline_text", "")
             if inline:
@@ -100,8 +114,9 @@ def _step_to_expanded(step: OpStep) -> List[str]:
             lines.append("end")
         else:
             path = params.get("path") or ""
-            cols = params.get("columns") or []
-            cols_str = f", columns({', '.join(cols)})" if cols else ""
+            cols = ds_decl.columns if ds_decl and ds_decl.columns else (params.get("columns") or [])
+            column_types = ds_decl.column_types if ds_decl else None
+            cols_str = f", columns({_format_columns(cols, column_types)})" if cols else ""
             lines.append(f'datasource {name} = csv("{path}"{cols_str})')
         return lines
 
@@ -243,7 +258,7 @@ def irdoc_to_expanded_sans(doc: IRDoc) -> str:
         if isinstance(step, UnknownBlockStep):
             continue
         if isinstance(step, OpStep):
-            for line in _step_to_expanded(step):
+            for line in _step_to_expanded(step, doc.datasources):
                 if line:
                     lines.append(line)
     return "\n".join(lines) + "\n"

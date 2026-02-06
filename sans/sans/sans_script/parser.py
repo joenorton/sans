@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from sans.expr import ExprNode
 from sans.parser_expr import parse_expression_from_string
 from sans.legacy import find_legacy_tokens
+from sans.types import Type, parse_type_name
 
 from .ast import (
     AssertStmt,
@@ -334,12 +335,16 @@ class SansScriptParser:
         if m_csv:
             path = m_csv.group(1)
             columns_str = m_csv.group(2)
-            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else None
+            columns = None
+            column_types = None
+            if columns_str:
+                columns, column_types = self._parse_columns_with_types(columns_str, rhs_line.number)
             return DatasourceDeclaration(
                 name=name,
                 kind="csv",
                 path=path,
                 columns=columns,
+                column_types=column_types,
                 inline_text=None,
                 inline_sha256=None,
                 span=SourceSpan(line.number, rhs_line.number),
@@ -415,9 +420,13 @@ class SansScriptParser:
                         line=line.number,
                     )
                 columns_str = m_cols.group(1)
-                columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else None
+                columns = None
+                column_types = None
+                if columns_str:
+                    columns, column_types = self._parse_columns_with_types(columns_str, rhs_line.number)
             else:
                 columns = None
+                column_types = None
 
             try:
                 import ast
@@ -443,6 +452,7 @@ class SansScriptParser:
                 kind="inline_csv",
                 path=None,
                 columns=columns,
+                column_types=column_types,
                 inline_text=normalized,
                 inline_sha256=sha,
                 span=SourceSpan(line.number, rhs_line.number),
@@ -470,7 +480,10 @@ class SansScriptParser:
         )
         if m_inline:
             columns_str = m_inline.group(1)
-            columns = self._parse_columns(columns_str, rhs_line.number) if columns_str else None
+            columns = None
+            column_types = None
+            if columns_str:
+                columns, column_types = self._parse_columns_with_types(columns_str, rhs_line.number)
 
             # read block lines until `end`
             body_lines: list[str] = []
@@ -497,6 +510,7 @@ class SansScriptParser:
                 kind="inline_csv",
                 path=None,
                 columns=columns,
+                column_types=column_types,
                 inline_text=normalized,
                 inline_sha256=sha,
                 span=SourceSpan(start_line, end_line),
@@ -1155,6 +1169,41 @@ class SansScriptParser:
         if lower:
             return [col.lower() for col in cols]
         return cols
+
+    def _parse_columns_with_types(self, segment: str, line_no: int) -> tuple[List[str], Optional[Dict[str, Type]]]:
+        raw_cols = [part.strip().strip(",") for part in re.split(r"[\s,]+", segment) if part.strip()]
+        if not raw_cols:
+            raise SansScriptError(
+                code="E_PARSE",
+                message="Column list cannot be empty.",
+                line=line_no,
+            )
+        columns: List[str] = []
+        column_types: Dict[str, Type] = {}
+        for token in raw_cols:
+            if ":" in token:
+                name, type_str = token.split(":", 1)
+                name = name.strip()
+                type_str = type_str.strip()
+                if not name or not type_str:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message=f"Malformed column type annotation: '{token}'.",
+                        line=line_no,
+                    )
+                try:
+                    col_type = parse_type_name(type_str)
+                except ValueError:
+                    raise SansScriptError(
+                        code="E_PARSE",
+                        message=f"Unknown column type '{type_str}'.",
+                        line=line_no,
+                    )
+                columns.append(name)
+                column_types[name] = col_type
+            else:
+                columns.append(token)
+        return columns, (column_types or None)
 
     def _collect_block(self, header: _Line) -> tuple[List[_Line], int]:
         body: List[_Line] = []

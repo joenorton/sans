@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+from sans.types import Type
+
 
 @dataclass
 class SourceSpan:
@@ -101,6 +103,7 @@ class DatasourceDeclaration:
     path: Optional[str] = None
     # shared / optional
     columns: Optional[List[str]] = None
+    column_types: Optional[Dict[str, Type]] = None
     # inline_csv-backed
     inline_text: Optional[str] = None        # normalized CSV text
     inline_sha256: Optional[str] = None      # hash of normalized text

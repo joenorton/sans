@@ -25,6 +25,7 @@ from .xpt import load_xpt_with_warnings, dump_xpt, XptError
 from .evidence import collect_table_evidence, DEFAULT_EVIDENCE_CONFIG
 from .lineage import build_var_graph, write_vars_graph_json
 from . import __version__ as _engine_version
+from .types import Type, type_name
 import json
 from decimal import Decimal, InvalidOperation
 
@@ -48,6 +49,7 @@ class ExecutionResult:
     table_evidence: Optional[Dict[str, Any]] = None
     datasource_schemas: Optional[Dict[str, List[str]]] = None
     datasource_evidence: Optional[List[Dict[str, Any]]] = None
+    coercion_diagnostics: Optional[List[Dict[str, Any]]] = None
 
 
 class RuntimeFailure(Exception):
@@ -76,6 +78,123 @@ def _parse_value(raw: str) -> Any:
         return Decimal(raw)
     except (ValueError, InvalidOperation):
         return raw
+
+
+COERCE_SAMPLE_LIMIT = 10
+
+
+def _coerce_csv_token(raw: str, expected: Type) -> tuple[Any, Optional[str]]:
+    """
+    Coerce CSV token to expected type. Returns (value, failure_reason).
+    failure_reason is None on success.
+    """
+    if raw == "":
+        return None, None  # Preserve current ingestion: empty -> null
+    if expected == Type.STRING:
+        return raw, None
+    if expected == Type.INT:
+        s = raw.strip()
+        if not s:
+            return None, None
+        try:
+            return int(s), None
+        except ValueError:
+            return None, "invalid_int"
+    if expected == Type.DECIMAL:
+        s = raw.strip()
+        if not s:
+            return None, None
+        try:
+            return Decimal(s), None
+        except (ValueError, InvalidOperation):
+            return None, "invalid_decimal"
+    if expected == Type.BOOL:
+        s = raw.strip().lower()
+        if not s:
+            return None, None
+        if s in ("true", "1", "yes"):
+            return True, None
+        if s in ("false", "0", "no"):
+            return False, None
+        return None, "invalid_bool"
+    if expected == Type.NULL:
+        s = raw.strip()
+        if not s:
+            return None, None
+        return None, "invalid_null"
+    return raw, None
+
+
+def _coerce_csv_rows(
+    reader: csv.reader,
+    headers: List[str],
+    column_types: Dict[str, Type],
+    sample_cap: int,
+) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    rows: List[Dict[str, Any]] = []
+    stats: Dict[str, Dict[str, Any]] = {}
+    for col in headers:
+        if col in column_types:
+            stats[col] = {
+                "expected": column_types[col],
+                "failure_count": 0,
+                "sample_row_numbers": [],
+                "sample_raw_values": [],
+                "raw_seen": set(),
+                "reason": None,
+            }
+
+    row_index = 0
+    for row in reader:
+        if not row:
+            continue
+        row_index += 1
+        row_dict: Dict[str, Any] = {}
+        for i, col in enumerate(headers):
+            raw = row[i] if i < len(row) else ""
+            expected = column_types.get(col)
+            if expected is not None:
+                value, reason = _coerce_csv_token(raw, expected)
+                if reason:
+                    stat = stats[col]
+                    stat["failure_count"] += 1
+                    if stat["reason"] is None:
+                        stat["reason"] = reason
+                    elif stat["reason"] != reason:
+                        stat["reason"] = "mixed"
+                    if len(stat["sample_row_numbers"]) < sample_cap:
+                        stat["sample_row_numbers"].append(row_index)
+                    raw_trim = raw.strip()
+                    if raw_trim not in stat["raw_seen"] and len(stat["sample_raw_values"]) < sample_cap:
+                        stat["sample_raw_values"].append(raw_trim)
+                        stat["raw_seen"].add(raw_trim)
+                    value = None
+                row_dict[col] = value
+            else:
+                row_dict[col] = _parse_value(raw)
+        rows.append(row_dict)
+
+    failures: List[Dict[str, Any]] = []
+    for col in headers:
+        stat = stats.get(col)
+        if not stat or stat["failure_count"] == 0:
+            continue
+        failures.append({
+            "column": col,
+            "expected_type": type_name(stat["expected"]),
+            "failure_count": stat["failure_count"],
+            "sample_row_numbers": stat["sample_row_numbers"],
+            "sample_raw_values": stat["sample_raw_values"],
+            "failure_reason": stat["reason"] or "unknown",
+        })
+
+    if not failures:
+        return rows, None
+    return rows, {
+        "total_rows_scanned": row_index,
+        "columns": failures,
+        "truncated": False,
+    }
 
 
 def _compare_sas(left: Any, right: Any, op: str) -> bool:
@@ -184,6 +303,25 @@ def _load_csv_with_header(path: Path) -> tuple[List[Dict[str, Any]], List[str]]:
         return rows, headers
 
 
+def _load_csv_with_header_typed(
+    path: Path,
+    column_types: Dict[str, Type],
+    sample_cap: int = COERCE_SAMPLE_LIMIT,
+) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
+    with path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        try:
+            headers = next(reader)
+        except StopIteration:
+            return [], [], None
+
+        if not headers:
+            return [], [], None
+
+        rows, summary = _coerce_csv_rows(reader, headers, column_types, sample_cap)
+        return rows, headers, summary
+
+
 def _load_csv(path: Path) -> List[Dict[str, Any]]:
     rows, _headers = _load_csv_with_header(path)
     return rows
@@ -208,6 +346,24 @@ def _parse_inline_csv_text(inline_text: str) -> tuple[List[Dict[str, Any]], List
             row_dict[col] = _parse_value(row[i]) if i < len(row) else None
         rows_d.append(row_dict)
     return rows_d, headers
+
+
+def _parse_inline_csv_text_typed(
+    inline_text: str,
+    column_types: Dict[str, Type],
+    sample_cap: int = COERCE_SAMPLE_LIMIT,
+) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
+    from io import StringIO
+    buf = StringIO(inline_text.strip())
+    reader = csv.reader(buf)
+    try:
+        headers = next(reader)
+    except StopIteration:
+        return [], [], None
+    if not headers:
+        return [], [], None
+    rows_d, summary = _coerce_csv_rows(reader, headers, column_types, sample_cap)
+    return rows_d, headers, summary
 
 
 
@@ -1287,6 +1443,7 @@ def execute_plan(
     table_evidence: Dict[str, Any] = {}
     datasource_schemas: Dict[str, List[str]] = {}
     datasource_evidence: List[Dict[str, Any]] = []
+    coercion_diagnostics: List[Dict[str, Any]] = []
 
     try:
         tables: Dict[str, List[Dict[str, Any]]] = {}
@@ -1353,12 +1510,18 @@ def execute_plan(
                 pinned_cols = params.get("columns")
                 if isinstance(pinned_cols, list) and not pinned_cols:
                     pinned_cols = None
+                ds_decl = ir_doc.datasources.get(ds_name) if isinstance(ds_name, str) else None
+                column_types = ds_decl.column_types if ds_decl and ds_decl.column_types else None
                 data_dir = out_dir / INPUTS_DATA
                 data_dir.mkdir(parents=True, exist_ok=True)
                 materialized_path = data_dir / f"{ds_name}.csv"
                 if kind == "inline_csv":
                     inline_text = params.get("inline_text") or ""
-                    rows_d, headers = _parse_inline_csv_text(inline_text)
+                    if column_types:
+                        rows_d, headers, summary = _parse_inline_csv_text_typed(inline_text, column_types)
+                    else:
+                        rows_d, headers = _parse_inline_csv_text(inline_text)
+                        summary = None
                     if pinned_cols is not None and headers != pinned_cols:
                         raise RuntimeFailure(
                             "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
@@ -1366,6 +1529,27 @@ def execute_plan(
                                 f"Datasource '{ds_name}' columns do not match header. "
                                 f"Pinned: {pinned_cols}; Header: {headers}."
                             ),
+                            _loc_to_dict(step.loc),
+                        )
+                    if summary:
+                        materialized_path.write_text(inline_text, encoding="utf-8")
+                        coercion_diagnostics.append({
+                            "datasource": ds_name,
+                            "path": bundle_relative_path(materialized_path, out_dir),
+                            "total_rows_scanned": summary["total_rows_scanned"],
+                            "columns": summary["columns"],
+                            "truncated": summary.get("truncated", False),
+                        })
+                        datasource_evidence.append({
+                            "name": ds_name,
+                            "table_id": out_name,
+                            "kind": kind,
+                            "path": str(materialized_path),
+                            "columns": list(headers),
+                        })
+                        raise RuntimeFailure(
+                            "E_CSV_COERCE",
+                            f"Datasource '{ds_name}' failed typed CSV coercion.",
                             _loc_to_dict(step.loc),
                         )
                     tables[out_name] = rows_d
@@ -1410,7 +1594,13 @@ def execute_plan(
                         shutil.copy2(path, materialized_path)
                         datasource_schemas[out_name] = list(headers)
                     else:
-                        rows_d, headers = _load_csv_with_header(path)
+                        import shutil
+                        shutil.copy2(path, materialized_path)
+                        if column_types:
+                            rows_d, headers, summary = _load_csv_with_header_typed(path, column_types)
+                        else:
+                            rows_d, headers = _load_csv_with_header(path)
+                            summary = None
                         if pinned_cols is not None and headers != pinned_cols:
                             raise RuntimeFailure(
                                 "SANS_RUNTIME_DATASOURCE_SCHEMA_MISMATCH",
@@ -1420,9 +1610,27 @@ def execute_plan(
                                 ),
                                 _loc_to_dict(step.loc),
                             )
+                        if summary:
+                            coercion_diagnostics.append({
+                                "datasource": ds_name,
+                                "path": bundle_relative_path(materialized_path, out_dir),
+                                "total_rows_scanned": summary["total_rows_scanned"],
+                                "columns": summary["columns"],
+                                "truncated": summary.get("truncated", False),
+                            })
+                            datasource_evidence.append({
+                                "name": ds_name,
+                                "table_id": out_name,
+                                "kind": kind,
+                                "path": str(materialized_path),
+                                "columns": list(headers),
+                            })
+                            raise RuntimeFailure(
+                                "E_CSV_COERCE",
+                                f"Datasource '{ds_name}' failed typed CSV coercion.",
+                                _loc_to_dict(step.loc),
+                            )
                         tables[out_name] = rows_d
-                        import shutil
-                        shutil.copy2(path, materialized_path)
                         datasource_schemas[out_name] = list(headers)
                 datasource_evidence.append({
                     "name": ds_name,
@@ -1708,6 +1916,7 @@ def execute_plan(
             table_evidence=table_evidence,
             datasource_schemas=datasource_schemas,
             datasource_evidence=datasource_evidence,
+            coercion_diagnostics=coercion_diagnostics,
         )
 
     except RuntimeFailure as err:
@@ -1721,6 +1930,7 @@ def execute_plan(
             table_evidence=table_evidence,
             datasource_schemas=datasource_schemas,
             datasource_evidence=datasource_evidence,
+            coercion_diagnostics=coercion_diagnostics,
         )
 
 
@@ -1949,6 +2159,11 @@ def run_script(
                 "columns": entry.get("columns") or [],
             }
         evidence["datasources"] = datasources
+    if result.coercion_diagnostics:
+        evidence["coercion_diagnostics"] = sorted(
+            result.coercion_diagnostics,
+            key=lambda e: e.get("datasource", ""),
+        )
     seen_outputs: set[tuple[str, str]] = set()
     for out in report["outputs"]:
         key = (out["name"], out["path"])

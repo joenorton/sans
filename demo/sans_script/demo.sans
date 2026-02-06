@@ -1,6 +1,6 @@
 # sans 0.1
 
-datasource in = csv("in.csv")
+datasource in = csv("in.csv", columns(a:int, b:int))
 
 const { high_label = "High risk", low_label = "Low risk" }
 
@@ -8,7 +8,7 @@ table enriched = from(in) do
 	rename(b -> base_b)
 	filter(a + base_b >= 10)
 	derive do
-		update! c = a * base_b
+		c = a * base_b
 		risk = if(c > 50, "HIGH", "LOW")
 		level = if(risk == "HIGH", 2, 1)
 		risk_label = if(risk == "HIGH", high_label, if(risk == "LOW", low_label, ""))

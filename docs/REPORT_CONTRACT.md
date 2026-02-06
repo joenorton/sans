@@ -14,7 +14,7 @@ Top-level fields
 - `primary_error`: `{code, message, loc}` or `null`.
 - `diagnostics[]`: list of `{code, message, loc}` entries.
 - `inputs[]`: list of `{role, name, path, sha256}`. Role is one of `source`, `preprocessed`, `expanded`, `datasource`. All paths bundle-relative, forward slashes only. **sha256 required** (non-null).
-- `artifacts[]`: list of `{name, path, sha256}` (e.g. plan.ir.json, registry.candidate.json, runtime.evidence.json). **sha256 required** (non-null). report.json is **not** listed in any array.
+- `artifacts[]`: list of `{name, path, sha256}` (e.g. plan.ir.json, schema.evidence.json, registry.candidate.json, runtime.evidence.json). **sha256 required** (non-null). report.json is **not** listed in any array.
 - `outputs[]`: list of `{name, path, sha256, rows?, columns?}` (user-facing table files only). Path under `outputs/`; subpaths preserved. **sha256 required** (non-null).
 - `plan_path`: bundle-relative path to plan (e.g. `artifacts/plan.ir.json`).
 - `report_sha256`: SHA-256 of the canonical report payload (used by `sans verify` for self-check).
@@ -46,7 +46,7 @@ Bundle layout (v0.3)
 - `report.json` at bundle root (only file at root besides directory structure).
 - `inputs/source/`: analysis script, preprocessed.sas (if any), expanded.sans (if any).
 - `inputs/data/`: materialized datasource files (by logical name).
-- `artifacts/`: plan.ir.json, registry.candidate.json, runtime.evidence.json.
+- `artifacts/`: plan.ir.json, schema.evidence.json, registry.candidate.json, runtime.evidence.json.
 - `outputs/`: user-facing table files (e.g. out.csv from save step).
 
 Notes

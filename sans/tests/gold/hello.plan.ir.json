@@ -15,14 +15,17 @@
       "params": {
         "name": "in",
         "path": null,
-        "columns": null,
+        "columns": [
+          "a",
+          "b"
+        ],
         "kind": "inline_csv",
         "inline_text": "  a,b\n  6,7\n  3,2\n",
         "inline_sha256": "a4e9bdec268b4972d200e960fc015dfc8eb8890972a34426a1b98bf66e668e8a"
       },
-      "transform_id": "d144766430a29381423c8ff8342cdf660e596f720188d347a3184f20456c37a0",
-      "transform_class_id": "94b445d30abe1c70f15708394b9f1a46a90d689c2659372db6488394a1f2b805",
-      "step_id": "42d7cab5a4dfff44b85a9ba09187a29c3c15a03f59a0e4cd3191b9106727b38c"
+      "transform_id": "b79b523ff08166ce977674037b233b3bffd6f3129c7f3a3578aa957ed68125bf",
+      "transform_class_id": "d76a96290dbcd5494215707b300fdc95b5c31da6585586ee8834554db645b8f4",
+      "step_id": "930e0b3766c48b9dfcb9a9107a06cae17058a3e82faef0dea8d3be78b374a994"
     },
     {
       "kind": "op",
@@ -193,7 +196,14 @@
   "datasources": {
     "in": {
       "path": null,
-      "columns": null
+      "columns": [
+        "a",
+        "b"
+      ],
+      "column_types": {
+        "a": "int",
+        "b": "int"
+      }
     }
   }
 }

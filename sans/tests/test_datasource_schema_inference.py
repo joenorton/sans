@@ -75,7 +75,7 @@ def test_vars_graph_uses_inferred_schema(tmp_path: Path, caplog) -> None:
         "# sans 0.1\n"
         f"datasource lb = csv(\"{csv_path.as_posix()}\")\n"
         "table out = from(lb) do\n"
-        "  filter A > 1\n"
+        "  filter A == null\n"
         "  rename(A -> A1)\n"
         "  select A1, B\n"
         "end\n"

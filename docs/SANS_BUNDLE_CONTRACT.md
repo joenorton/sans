@@ -23,7 +23,7 @@ a bundle is a directory containing:
 * `report.json` at bundle root (only file at root besides directory structure)
 * `inputs/source/` — analysis script, preprocessed.sas (if any), expanded.sans (if any)
 * `inputs/data/` — materialized datasource files (by logical name)
-* `artifacts/` — plan.ir.json, graph.json, vars.graph.json, table.effects.json, registry.candidate.json, runtime.evidence.json
+* `artifacts/` — plan.ir.json, schema.evidence.json, graph.json, vars.graph.json, table.effects.json, registry.candidate.json, runtime.evidence.json
 * `outputs/` — user-facing table files (csv/xpt) from save step or emit
 
 report and evidence must **never** contain paths outside the bundle; if any file would be outside, the run errors (no exceptions).
@@ -112,6 +112,7 @@ represents the executed plan (semantic wiring + transform specs).
 * `steps`: ordered list
 * `tables`: list of input table logical names
 * `table_facts`: optional, non-semantic hints (e.g. `sorted_by`)
+* `datasources`: mapping of datasource name → `{path, columns, column_types?}` where `column_types` maps column name → type string (`null|bool|int|decimal|string|unknown`)
 
 ### step object
 
@@ -221,6 +222,31 @@ tables[table_name] = {
 * `tables` only includes outputs written via **save** (not implicit terminal tables).
 * all values are **runtime evidence** of what happened; **plan.ir literals are not treated as runtime value evidence**.
 * when datasets are large, evidence MAY be computed on a deterministic sample; if so, `sample` MUST be present.
+
+### typed CSV coercion diagnostics (optional)
+
+When typed CSV ingestion fails, `runtime.evidence.json` includes:
+
+```
+coercion_diagnostics = [
+  {
+    "datasource": "<name>",
+    "path": "<bundle-relative path>",
+    "total_rows_scanned": <int>,  # 1-based data rows, header excluded
+    "truncated": <bool>,
+    "columns": [
+      {
+        "column": "<col>",
+        "expected_type": "null|bool|int|decimal|string|unknown",
+        "failure_count": <int>,
+        "sample_row_numbers": [<int>, ...],  # first N row numbers (ascending)
+        "sample_raw_values": ["<raw>", ...], # first N distinct tokens (trimmed)
+        "failure_reason": "invalid_int|invalid_decimal|invalid_bool|unexpected_empty|mixed"
+      }
+    ]
+  }
+]
+```
 
 
 ### step evidence object (list form, recommended)

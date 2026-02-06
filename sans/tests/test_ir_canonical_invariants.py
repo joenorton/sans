@@ -18,6 +18,7 @@ from sans.ir import (
     TableFact,
     DatasourceDecl,
 )
+from sans.types import parse_type_name
 
 
 # Legacy keys that must not appear in any step.params after validate()
@@ -89,10 +90,15 @@ def _plan_dict_to_irdoc(plan: dict) -> IRDoc:
     }
     datasources = {}
     for name, ds in plan.get("datasources", {}).items():
+        raw_types = ds.get("column_types")
+        column_types = None
+        if isinstance(raw_types, dict):
+            column_types = {k: parse_type_name(v) for k, v in raw_types.items()}
         datasources[name] = DatasourceDecl(
             kind=ds.get("kind", "csv"),
             path=ds.get("path"),
             columns=ds.get("columns"),
+            column_types=column_types,
             inline_text=ds.get("inline_text"),
             inline_sha256=ds.get("inline_sha256"),
         )
