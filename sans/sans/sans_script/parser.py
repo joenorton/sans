@@ -790,7 +790,7 @@ class SansScriptParser:
             processed_lowered = lowered
 
             for k in ["select", "filter", "derive", "rename", "drop", "update!", "cast"]:
-                if processed_lowered.startswith(k + " ") or processed_lowered.startswith(k + "("):
+                if processed_lowered.startswith(k + " ") or processed_lowered.startswith(k + "(") or processed_lowered.strip() == k:
                     kw = k
                     kw_len = len(k)
                     break
@@ -1008,6 +1008,8 @@ class SansScriptParser:
         if kind == "select":
             params["keep"] = self._parse_columns(args_str, line_no)
         elif kind == "drop":
+            if args_str.startswith("(") and args_str.endswith(")"):
+                args_str = args_str[1:-1].strip()
             params["drop"] = self._parse_columns(args_str, line_no)
         elif kind == "filter":
             # Strip parens if present

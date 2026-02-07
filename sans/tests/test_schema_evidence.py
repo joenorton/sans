@@ -52,6 +52,39 @@ def test_schema_evidence_emitted(tmp_path: Path):
     ).strip()
 
 
+def test_drop_excluded_from_schema_evidence(tmp_path: Path):
+    """After drop step, schema.evidence.json excludes dropped columns."""
+    script = "\n".join(
+        [
+            "# sans 0.1",
+            "datasource src = inline_csv columns(a:int, b:int, c:int) do",
+            "  a,b,c",
+            "  1,2,3",
+            "end",
+            "table out = from(src) do",
+            "  drop b",
+            "end",
+            "save out to \"out.csv\"",
+        ]
+    )
+    from sans.compiler import emit_check_artifacts
+    _, report = emit_check_artifacts(
+        script,
+        "drop_evidence.sans",
+        out_dir=tmp_path,
+        tables=set(),
+        strict=True,
+    )
+    assert report["status"] == "ok"
+    schema_path = _schema_path(tmp_path)
+    assert schema_path.exists()
+    data = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert "out" in data["tables"]
+    out_cols = set(data["tables"]["out"].keys())
+    assert out_cols == {"a", "c"}
+    assert "b" not in out_cols
+
+
 def test_filter_requires_bool(tmp_path: Path):
     csv_path = Path("fixtures/types/data/simple.csv").resolve()
     script = "\n".join(

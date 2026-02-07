@@ -490,6 +490,16 @@ class IRDoc:
                     normalize_aggregate_params(step.params, step.loc)
                 elif step.op == "cast":
                     normalize_cast_params(step.params, step.loc)
+                elif step.op == "drop":
+                    raw = step.params.get("cols") or step.params.get("drop")
+                    step.params["cols"] = normalize_select_cols(raw, step.loc)
+                    step.params.pop("drop", None)
+                    if not step.params["cols"]:
+                        raise UnknownBlockStep(
+                            code="SANS_VALIDATE_DROP_EMPTY",
+                            message="Drop operation requires non-empty column list.",
+                            loc=step.loc,
+                        )
 
                 # Determine sortedness for output tables based on the operation.
                 # Choose the first *real table* input as the sortedness reference.
@@ -606,6 +616,15 @@ class IRDoc:
                     # cast preserves order (doesn't change row order)
                     output_sorted_by = input_sorted_by
 
+                elif step.op == "drop":
+                    drop_cols = set(step.params.get("cols") or [])
+                    if input_sorted_by is None:
+                        output_sorted_by = None
+                    elif any(k in drop_cols for k in input_sorted_by):
+                        output_sorted_by = None
+                    else:
+                        output_sorted_by = input_sorted_by
+
                 # --- Add/Update output table facts ---
                 for output_table in step.outputs:
                     if is_ds_input(output_table):
@@ -625,7 +644,7 @@ class IRDoc:
             infer_table_schema_types(self)
         except TypeInferenceError as err:
             raise UnknownBlockStep(
-                code="E_TYPE",
+                code=getattr(err, "code", "E_TYPE"),
                 message=err.message,
                 loc=err.loc or Loc("<string>", 1, 1),
             )

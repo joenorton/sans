@@ -253,10 +253,10 @@ class Lowerer:
             return output_table
         elif transform.kind == "drop":
             self.steps.append(OpStep(
-                op="select",
+                op="drop",
                 inputs=[input_table],
                 outputs=[output_table],
-                params={"drop": transform.params.get("drop", [])},
+                params={"cols": transform.params.get("drop", [])},
                 loc=self._loc(transform.span)
             ))
             return output_table

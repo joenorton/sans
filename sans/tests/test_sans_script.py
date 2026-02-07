@@ -442,6 +442,113 @@ def test_cast_parse_and_expanded():
     assert col_to.get(("b", "decimal"), {}).get("trim") is True
 
 
+def test_drop_in_pipeline_parses_and_expands():
+    """drop in pipeline parses and expanded.sans emits 'drop a, b'."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b,c\n"
+        "  1,2,3\n"
+        "end\n"
+        "table t = from(in) do\n"
+        "  drop b\n"
+        "end\n"
+    )
+    irdoc = compile_sans_script(script, "drop.sans", tables=set())
+    assert not any(
+        isinstance(s, UnknownBlockStep) and getattr(s, "severity", "") == "fatal"
+        for s in irdoc.steps
+    )
+    validated = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=irdoc.table_facts,
+        datasources=irdoc.datasources,
+    ).validate()
+    irdoc = IRDoc(
+        steps=irdoc.steps,
+        tables=irdoc.tables,
+        table_facts=validated,
+        datasources=irdoc.datasources,
+    )
+    expanded = irdoc_to_expanded_sans(irdoc)
+    assert "drop b" in expanded
+    drop_steps = [s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "drop"]
+    assert len(drop_steps) == 1
+    assert drop_steps[0].params.get("cols") == ["b"]
+
+
+def test_drop_empty_list_refused():
+    """drop with empty column list fails at parse."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  1,2\n"
+        "end\n"
+        "table t = from(in) do\n"
+        "  drop\n"
+        "end\n"
+    )
+    import pytest
+    from sans.sans_script import SansScriptError, parse_sans_script
+    with pytest.raises(SansScriptError) as exc_info:
+        parse_sans_script(script, "drop_empty.sans")
+    assert exc_info.value.code == "E_PARSE"
+    assert "empty" in exc_info.value.message.lower() or "Column list" in exc_info.value.message or "cannot be empty" in exc_info.value.message.lower()
+
+
+def test_drop_missing_column_refused():
+    """Dropping a non-existent column fails with E_COLUMN_NOT_FOUND."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  1,2\n"
+        "end\n"
+        "table t = from(in) do\n"
+        "  drop z\n"
+        "end\n"
+    )
+    irdoc = compile_sans_script(script, "drop_missing.sans", tables=set())
+    assert irdoc.steps
+    try:
+        IRDoc(
+            steps=irdoc.steps,
+            tables=irdoc.tables,
+            table_facts=irdoc.table_facts,
+            datasources=irdoc.datasources,
+        ).validate()
+        assert False, "Expected E_COLUMN_NOT_FOUND"
+    except UnknownBlockStep as err:
+        assert err.code == "E_COLUMN_NOT_FOUND"
+        assert "z" in err.message
+
+
+def test_drop_outside_pipeline_fails():
+    """Top-level 'drop a, b' (no table binding) fails: table 'drop' undefined or parse."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv do\n"
+        "  a,b\n"
+        "  1,2\n"
+        "end\n"
+        "drop a, b\n"
+    )
+    irdoc = compile_sans_script(script, "drop_top.sans", tables=set())
+    assert irdoc.steps
+    try:
+        IRDoc(
+            steps=irdoc.steps,
+            tables=irdoc.tables,
+            table_facts=irdoc.table_facts,
+            datasources=irdoc.datasources,
+        ).validate()
+        assert False, "Expected validation error"
+    except UnknownBlockStep as err:
+        assert err.code in ("SANS_VALIDATE_TABLE_UNDEFINED", "E_TYPE", "E_COLUMN_NOT_FOUND", "E_PARSE")
+
+
 def test_cast_round_trip_byte():
     """expanded.sans with cast → IR → expanded.sans is byte-identical."""
     script = (

@@ -1,0 +1,5 @@
+# sans 0.1
+datasource raw = csv("raw.csv", columns(a, b, c))
+table t = from(raw) do
+	drop b
+end

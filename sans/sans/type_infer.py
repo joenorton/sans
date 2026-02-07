@@ -272,6 +272,24 @@ def infer_table_schema_types(irdoc: Any) -> Dict[str, Dict[str, Type]]:
                 schema_map[out] = dict(out_schema) if isinstance(out_schema, dict) else None
             continue
 
+        if op == "drop":
+            cols = step.params.get("cols") or []
+            if isinstance(input_schema, dict):
+                drop_set = set(cols)
+                for c in cols:
+                    if c not in input_schema:
+                        raise TypeInferenceError(
+                            f"Column '{c}' not found; cannot drop.",
+                            code="E_COLUMN_NOT_FOUND",
+                            loc=step.loc,
+                        )
+                out_schema = {c: t for c, t in input_schema.items() if c not in drop_set}
+            else:
+                out_schema = None
+            for out in outputs:
+                schema_map[out] = dict(out_schema) if isinstance(out_schema, dict) else None
+            continue
+
         if op == "rename":
             mapping = step.params.get("mapping") or step.params.get("mappings") or []
             if isinstance(mapping, list):

@@ -229,7 +229,7 @@ rules:
 
 **expanded.sans** is the canonical human-readable form: fully explicit, no macros, no dataset options, no procs, no implicit defaults.
 
-* **Kernel vocabulary only**: `from(datasource)`, `derive(...)`, `update!(...)`, `select`, `rename`, `filter`, `sort`, `aggregate`, `const`, `let`, `assert`, `save`. No aliases (e.g. no `mutate`, no `compute`, no `summary` in expanded output).
+* **Kernel vocabulary only**: `from(datasource)`, `derive(...)`, `update!(...)`, `select`, `drop`, `rename`, `filter`, `sort`, `aggregate`, `const`, `let`, `assert`, `save`. No aliases (e.g. no `mutate`, no `compute`, no `summary` in expanded output).
 * **No block form in expanded**: each compute is a single statement; block `derive do ... end` is expanded to one statement per column op.
 * **No postfix-only at top level**: linear chain of named tables, e.g. `table s1 = from(raw)`, `table s2 = s1 derive(...)`, etc.
 * **Explicit output**: only **save** creates output artifacts; no implicit "last table wins".

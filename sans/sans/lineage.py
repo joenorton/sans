@@ -109,7 +109,7 @@ def _infer_schema_two_pass(
     irdoc: IRDoc, initial_schema: Dict[str, List[str]]
 ) -> Dict[str, Optional[List[str]]]:
     schema: Dict[str, Optional[List[str]]] = {k: list(v) for k, v in (initial_schema or {}).items()}
-    supported_ops = {"identity", "compute", "filter", "select", "sort", "rename"}
+    supported_ops = {"identity", "compute", "filter", "select", "drop", "sort", "rename"}
 
     for step in irdoc.steps:
         if not isinstance(step, OpStep):
@@ -155,6 +155,15 @@ def _infer_schema_two_pass(
                 schema[output_table] = None
             else:
                 schema[output_table] = [col for col in input_schema if col not in drop]
+            continue
+
+        if step.op == "drop":
+            cols = step.params.get("cols") or []
+            drop_set = set(cols)
+            if input_schema is None:
+                schema[output_table] = None
+            else:
+                schema[output_table] = [col for col in input_schema if col not in drop_set]
             continue
 
         if step.op in {"filter", "sort", "identity"}:
@@ -248,7 +257,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
         for col in cols:
             add_node(table_id, col, "source", None, None, None)
 
-    supported_ops = {"identity", "compute", "filter", "select", "sort", "rename"}
+    supported_ops = {"identity", "compute", "filter", "select", "drop", "sort", "rename"}
 
     for step in irdoc.steps:
         if not isinstance(step, OpStep):
@@ -341,6 +350,22 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
             else:
                 for col in input_schema:
                     if col in drop:
+                        continue
+                    add_node(output_table, col, "pass_through", None, None, None)
+                    add_edge(input_table, col, output_table, col, kind="flow")
+            continue
+
+        if step.op == "drop":
+            cols = step.params.get("cols") or []
+            drop_set = set(cols)
+            if input_schema is None:
+                logger.warning(
+                    "vars.graph: schema unknown for '%s' in drop; skipping pass-through edges",
+                    input_table,
+                )
+            else:
+                for col in input_schema:
+                    if col in drop_set:
                         continue
                     add_node(output_table, col, "pass_through", None, None, None)
                     add_edge(input_table, col, output_table, col, kind="flow")

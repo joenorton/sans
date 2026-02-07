@@ -1502,7 +1502,7 @@ def execute_plan(
                 )
 
             op = step.op
-            if op not in {"identity", "compute", "filter", "select", "rename", "sort", "cast", "datasource", "data_step", "transpose", "sql_select", "format", "aggregate", "summary", "save", "assert", "let_scalar", "const"}:
+            if op not in {"identity", "compute", "filter", "select", "drop", "rename", "sort", "cast", "datasource", "data_step", "transpose", "sql_select", "format", "aggregate", "summary", "save", "assert", "let_scalar", "const"}:
                 raise RuntimeFailure(
                     "SANS_CAP_UNSUPPORTED_OP",
                     f"Unsupported operation '{op}'",
@@ -1736,6 +1736,13 @@ def execute_plan(
                             new_row = {k: row.get(k) for k in cols}
                         else:
                             new_row = {k: v for k, v in row.items() if k not in drop}
+                        output_rows.append(new_row)
+                elif op == "drop":
+                    cols = step.params.get("cols") or []
+                    drop_set = set(cols)
+                    output_rows = []
+                    for row in input_rows:
+                        new_row = {k: v for k, v in row.items() if k not in drop_set}
                         output_rows.append(new_row)
                 elif op == "rename":
                     mapping = step.params.get("mapping") or []

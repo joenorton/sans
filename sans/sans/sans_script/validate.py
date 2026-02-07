@@ -220,11 +220,12 @@ class SemanticValidator:
             if schema is not None:
                 for col in drop:
                     if col not in schema:
-                         self.warnings.append({
-                            "code": "W_DROP_NONEXISTENT",
-                            "message": f"Attempting to drop non-existent column '{col}'.",
-                            "line": line
-                        })
+                        raise SansScriptError(
+                            code="E_COLUMN_NOT_FOUND",
+                            message=f"Column '{col}' not found; cannot drop.",
+                            line=line,
+                            hint=f"Available columns: {', '.join(sorted(schema.keys()))}",
+                        )
                 return {c: t for c, t in schema.items() if c not in drop}
             return None
         elif kind == "filter":

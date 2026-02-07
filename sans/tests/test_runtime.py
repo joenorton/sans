@@ -1326,3 +1326,35 @@ def test_run_cast_sans(tmp_path):
     assert len(cast_ev) == 1
     assert "cast_failures" in cast_ev[0]
     assert "nulled" in cast_ev[0]
+
+
+def test_run_drop_sans(tmp_path):
+    """Sans script: csv -> drop -> save yields correct headers (dropped column excluded)."""
+    script = (
+        "# sans 0.1\n"
+        "datasource in = inline_csv columns(a:int, b:int, c:int) do\n"
+        "  a,b,c\n"
+        "  1,2,3\n"
+        "  4,5,6\n"
+        "end\n"
+        "table t = from(in) do\n"
+        "  drop b\n"
+        "end\n"
+        "save t to \"out.csv\"\n"
+    )
+    report = run_script(
+        text=script,
+        file_name="drop.sans",
+        bindings={},
+        out_dir=tmp_path,
+        strict=True,
+        legacy_sas=True,
+    )
+    assert report["status"] == "ok"
+    assert report["runtime"]["status"] == "ok"
+    out_csv = tmp_path / "outputs" / "out.csv"
+    assert out_csv.exists()
+    with out_csv.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["a", "c"]
+    assert rows[1:] == [["1", "3"], ["4", "6"]]

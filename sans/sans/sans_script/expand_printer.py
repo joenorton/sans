@@ -152,6 +152,11 @@ def _step_to_expanded(step: OpStep, datasources: Optional[Dict[str, DatasourceDe
             lines.append(f"table {out} = {inp_ref}")
         return lines
 
+    if op == "drop" and inp and out:
+        cols = params.get("cols") or []
+        lines.append(f"table {out} = {inp_ref} drop {', '.join(cols)}")
+        return lines
+
     if op == "rename" and inp and out:
         mapping = params.get("mapping") or []
         parts = [f"{p['from']} -> {p['to']}" for p in mapping]
