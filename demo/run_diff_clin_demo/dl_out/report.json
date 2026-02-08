@@ -9,25 +9,25 @@
       "role": "source",
       "name": "demo_low.sans",
       "path": "inputs/source/demo_low.sans",
-      "sha256": "42a72c261cb71157c74fbb56ca0659f97f617c3382571df340f1801388b9339c"
+      "sha256": "2e11af829258f1d673e80f031c63fdc93d40d1d8e03aac8daf46f22560e2d4c8"
     },
     {
       "role": "expanded",
       "name": "expanded.sans",
       "path": "inputs/source/expanded.sans",
-      "sha256": "3f89722b1e1297609b0a08f59b5759b8413505becd9178e882be1ee75feabd53"
+      "sha256": "d125bb7dd2ca3e147b5ee832f4f0f85b89ad69b6b16d084ac46d0cd297e63759"
     }
   ],
   "artifacts": [
     {
       "name": "plan.ir.json",
       "path": "artifacts/plan.ir.json",
-      "sha256": "dd7ea33b81697a1feb1abaef883a51a809992ef0c8f8f87bd41fd6c3e9290c9e"
+      "sha256": "a9c66ce1c43f80445de7e056389074baa03f5736274c5a03d0949a1b5a91df30"
     },
     {
       "name": "graph.json",
       "path": "artifacts/graph.json",
-      "sha256": "6673a7be63144b86bb00eb88a4577dee7742e5046e999b18b05d3f2ed97899ff"
+      "sha256": "0e6913ba2145188661b623216b2c3e312eb2bfc8e3436d8095c910e7d8c17d79"
     },
     {
       "name": "vars.graph.json",
@@ -37,32 +37,25 @@
     {
       "name": "table.effects.json",
       "path": "artifacts/table.effects.json",
-      "sha256": "292836b80bbfde4fdf27d226c33b3346f5432686bda2bb6700a6598bca7a65c9"
+      "sha256": "19a2183cb9cbfa7fc863e5314b8f70942f333fcd22f54cd74dea8ba0f72b056e"
+    },
+    {
+      "name": "schema.evidence.json",
+      "path": "artifacts/schema.evidence.json",
+      "sha256": "da299aa54764d2be3a0f6bc66d0b585203388e58d096c5699068414deff4593d"
     },
     {
       "name": "registry.candidate.json",
       "path": "artifacts/registry.candidate.json",
-      "sha256": "be2886fd40440083ec73a592a5436bc649b64ef3c6be5d8b5e3d809d8cac8420"
+      "sha256": "4f887cc6f800d5cd463c3d3bc80a6b360d087c5772b7b1301e992678b88d6f75"
     },
     {
       "name": "runtime.evidence.json",
       "path": "artifacts/runtime.evidence.json",
-      "sha256": "9c3ace92830b467dd8bcc9254c29eb5edfdcf1b163e7c921a1568098cdd3d9f9"
+      "sha256": "b39e11626770832dfc7bb4362d357d84fa3e4f45d08ed982a8dc731f76bfafff"
     }
   ],
   "outputs": [
-    {
-      "name": "sorted_high",
-      "path": "outputs/sorted_high.csv",
-      "sha256": "b5f896a7a802b5ba48ac40ab4461a3f9bec245eb595f9b3100b80864d2be4f86",
-      "rows": 8,
-      "columns": [
-        "USUBJID",
-        "VISITNUM",
-        "A1C",
-        "label"
-      ]
-    },
     {
       "name": "sorted_high",
       "path": "outputs/sorted_high.csv",
@@ -91,15 +84,35 @@
     ]
   },
   "timing": {
-    "compile_ms": 3,
+    "compile_ms": 0,
     "validate_ms": 0,
-    "execute_ms": 4
+    "execute_ms": 3
   },
-  "report_sha256": "8d9b8ffcff2373c20407d041a80a53cf457edcbc3acbc9fbef412f21ceec1a78",
+  "schema_lock_used_path": "C:\\Users\\joeno\\Documents\\GitHub\\sans\\demo\\run_diff_clin_demo\\demo_low.schema.lock.json",
+  "schema_lock_sha256": "65ead3010f0103d8be6692f9754ad8a2db60a6cfb33eefff42edeb817ff63344",
+  "schema_lock_applied_datasources": [
+    "lb"
+  ],
+  "schema_lock_missing_datasources": [],
+  "report_sha256": "6aee462e90ee5296c098545dc7b049e4e82bfdf9669a1724c596cc9a444cbf7a",
+  "schema_lock_auto_discovered": true,
+  "bundle_mode": "thin",
+  "bundle_format_version": 1,
+  "datasource_inputs": [
+    {
+      "datasource": "lb",
+      "name": "lb.csv",
+      "embedded": false,
+      "sha256": "d9ed13453c556bdabde38abe33ddd5dd807dccb14e80390931ea7bb7a12b02e9",
+      "size_bytes": 355,
+      "ref": "sha256:d9ed13453c556bdabde38abe33ddd5dd807dccb14e80390931ea7bb7a12b02e9"
+    }
+  ],
+  "schema_lock_copied_path": "schema.lock.json",
   "runtime": {
     "status": "ok",
     "timing": {
-      "execute_ms": 4
+      "execute_ms": 3
     }
   }
 }

@@ -135,7 +135,9 @@ def compute_artifact_hash(path: Path) -> Optional[str]:
 
 _DRIVE_RE = re.compile(r"^([A-Za-z]):(.*)$")
 _SELF_HASH_KEYS = {"report_sha256", "report_hash"}
-_PATH_LIST_KEYS = {"inputs", "artifacts", "outputs"}
+# Diagnostic-only: host-specific paths; excluded from canonical payload so report_sha256 is stable across machines
+_DIAGNOSTIC_ONLY_KEYS = {"schema_lock_used_path", "schema_lock_emit_path"}
+_PATH_LIST_KEYS = {"inputs", "artifacts", "outputs", "datasource_inputs"}
 _PATH_KEY_NAMES = {"path", "plan_path", "file"}
 
 
@@ -237,25 +239,47 @@ def _is_path_key(key: str) -> bool:
     return key in _PATH_KEY_NAMES or key.endswith("_path")
 
 
-def _canonicalize_report_value(value: Any, bundle_root: Optional[Path]) -> Any:
+def _input_sort_key(item: Any) -> tuple:
+    """Stable sort key for inputs: path or empty, then name (thin mode may omit path)."""
+    if not isinstance(item, dict):
+        return ("", "")
+    return (item.get("path") or "", item.get("name") or "")
+
+
+def _canonicalize_report_value(
+    value: Any, bundle_root: Optional[Path], report_root: Optional[Dict[str, Any]] = None
+) -> Any:
     if isinstance(value, dict):
         out: Dict[str, Any] = {}
+        is_root = report_root is None
+        root = value if is_root else report_root
+        skip_diagnostic = root is not None and root.get("bundle_mode") is not None
         for key, item in value.items():
             if key in _SELF_HASH_KEYS:
+                continue
+            if skip_diagnostic and key in _DIAGNOSTIC_ONLY_KEYS:
                 continue
             if _is_path_key(key) and item is not None:
                 out[key] = _normalize_path_for_hash(str(item), bundle_root)
             else:
-                out[key] = _canonicalize_report_value(item, bundle_root)
+                out[key] = _canonicalize_report_value(item, bundle_root, report_root)
         for list_key in _PATH_LIST_KEYS:
             if list_key in out and isinstance(out[list_key], list):
-                out[list_key] = sorted(
-                    out[list_key],
-                    key=lambda x: (x.get("path") if isinstance(x, dict) else ""),
-                )
+                if list_key == "inputs":
+                    out[list_key] = sorted(out[list_key], key=_input_sort_key)
+                elif list_key == "datasource_inputs":
+                    out[list_key] = sorted(
+                        out[list_key],
+                        key=lambda x: (x.get("datasource") if isinstance(x, dict) else ""),
+                    )
+                else:
+                    out[list_key] = sorted(
+                        out[list_key],
+                        key=lambda x: (x.get("path") if isinstance(x, dict) else ""),
+                    )
         return out
     if isinstance(value, list):
-        return [_canonicalize_report_value(v, bundle_root) for v in value]
+        return [_canonicalize_report_value(v, bundle_root, report_root) for v in value]
     return value
 
 
@@ -263,11 +287,12 @@ def canonicalize_report(report: Dict[str, Any], bundle_root: Path) -> Dict[str, 
     """
     Produce a deep copy of report suitable for deterministic hashing.
     - Removes self-hash fields (report_sha256/report_hash).
+    - Excludes diagnostic-only keys (e.g. schema_lock_used_path) for v2 bundles (when bundle_mode is set).
     - Normalizes all path-like fields (path, *_path, file) to bundle-relative forward slashes.
-    - Canonically sorts inputs, artifacts, outputs by path for determinism.
+    - Canonically sorts inputs by (path or "", name); artifacts, outputs by path.
     """
     bundle = Path(bundle_root).resolve()
-    return _canonicalize_report_value(copy.deepcopy(report), bundle)
+    return _canonicalize_report_value(copy.deepcopy(report), bundle, report)
 
 
 def canonicalize_report_for_hash(report: Dict[str, Any], bundle_root: Path) -> str:

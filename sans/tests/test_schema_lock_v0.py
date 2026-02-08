@@ -482,8 +482,8 @@ def test_lock_only_stages_datasource_inputs(tmp_path: Path):
     assert data_dir.exists()
     staged_lb = data_dir / "lb.csv"
     assert staged_lb.exists(), "Referenced CSV should be staged in inputs/data"
-    datasource_inputs = [inp for inp in report.get("inputs", []) if inp.get("role") == "datasource"]
-    assert any(inp.get("name") == "lb" for inp in datasource_inputs)
+    datasource_inputs = report.get("datasource_inputs", [])
+    assert any(d.get("datasource") == "lb" for d in datasource_inputs)
 
 
 # 18) Run with --schema-lock: lock is copied into out_dir; report has used/copied paths and sha256

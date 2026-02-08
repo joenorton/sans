@@ -87,7 +87,9 @@
     "schema_lock_emit_path": {"type": "string", "description": "Absolute path where the lock file was written"},
     "schema_lock_used_path": {"type": "string", "description": "Resolved path to the schema lock file used (user-provided or autodiscovered)"},
     "schema_lock_copied_path": {"type": "string", "description": "When a schema lock was used: bundle-relative path of lock copy in out_dir (e.g. schema.lock.json)"},
-    "schema_lock_auto_discovered": {"type": "boolean", "description": "True when sans run used a lock found next to the script (no --schema-lock passed)"}
+    "schema_lock_auto_discovered": {"type": "boolean", "description": "True when sans run used a lock found next to the script (no --schema-lock passed)"},
+    "bundle_mode": {"type": "string", "enum": ["full", "thin"], "description": "Bundle mode: full = datasource bytes embedded; thin = only fingerprints in report"},
+    "bundle_format_version": {"type": "integer", "description": "Format version when bundle_mode is present (e.g. 1)"}
   },
   "definitions": {
     "loc": {
@@ -115,12 +117,15 @@
     },
     "input": {
       "type": "object",
-      "required": ["role", "name", "path", "sha256"],
+      "required": ["role", "name", "sha256"],
       "properties": {
         "role": {"type": "string", "enum": ["source", "preprocessed", "expanded", "datasource"]},
         "name": {"type": "string", "minLength": 1},
-        "path": {"type": "string", "minLength": 1},
-        "sha256": {"type": "string", "minLength": 1}
+        "path": {"type": "string", "minLength": 1, "description": "Bundle-relative path; optional when role is datasource and embedded is false"},
+        "sha256": {"type": "string", "minLength": 1},
+        "embedded": {"type": "boolean", "description": "For datasource role: true = file in bundle, false = only fingerprints recorded"},
+        "size_bytes": {"type": "integer", "description": "For datasource role: file size in bytes"},
+        "ref": {"type": "string", "description": "Optional opaque external reference"}
       }
     },
     "artifact": {

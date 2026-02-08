@@ -20,13 +20,15 @@ this contract is designed to be:
 
 a bundle is a directory containing:
 
-* `report.json` at bundle root (only file at root besides directory structure). When a run uses or emits a schema lock, the report may include `schema_lock_sha256` (see docs/SCHEMA_LOCK_V0.md).
+* `report.json` at bundle root (only file at root besides directory structure). When a run uses or emits a schema lock, the report may include `schema_lock_sha256` (see docs/SCHEMA_LOCK_V0.md). Report may include **`bundle_mode`** (`"full"` | `"thin"`) and **`bundle_format_version`** (e.g. `1`); legacy bundles omit these and are treated as full.
 * `inputs/source/` — analysis script, preprocessed.sas (if any), expanded.sans (if any)
-* `inputs/data/` — materialized datasource files (by logical name)
+* `inputs/data/` — materialized datasource files (by logical name). In **thin** mode these are not copied; report still lists each datasource with `embedded: false`, `sha256`, `size_bytes` (and optional `ref`).
 * `artifacts/` — plan.ir.json, schema.evidence.json, graph.json, vars.graph.json, table.effects.json, registry.candidate.json, runtime.evidence.json
 * `outputs/` — user-facing table files (csv/xpt) from save step or emit
 
 report and evidence must **never** contain paths outside the bundle; if any file would be outside, the run errors (no exceptions).
+
+**bundle_mode**: explicit `"full"` (default) or `"thin"`. Full = datasource bytes embedded; thin = only fingerprints in report, no datasource bytes in bundle. Verification for thin bundles does not require datasource files to exist inside the bundle.
 
 cheshbon ingests with:
 

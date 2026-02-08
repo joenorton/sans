@@ -5,7 +5,13 @@
     "sha256": "d7839bebf5e8d37b8e210868a5e5bf72203fcd376c4a87ddda9310b1c77e2348"
   },
   "bindings": {},
-  "inputs": [],
+  "inputs": [
+    {
+      "name": "lb",
+      "path": null,
+      "sha256": "d9ed13453c556bdabde38abe33ddd5dd807dccb14e80390931ea7bb7a12b02e9"
+    }
+  ],
   "outputs": [
     {
       "name": "sorted_high",

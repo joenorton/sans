@@ -2,10 +2,16 @@
   "sans_version": "0.1.0",
   "plan_ir": {
     "path": "artifacts/plan.ir.json",
-    "sha256": "3b32f4509dee48cba090ff68dc4d7ffd4996fd4b251c42db7176e40bb5850e5b"
+    "sha256": "75b429412dc02669cfb344cfe1a92b4c4a810e58067ea387506ed2200b7d4748"
   },
   "bindings": {},
-  "inputs": [],
+  "inputs": [
+    {
+      "name": "lb",
+      "path": null,
+      "sha256": "d9ed13453c556bdabde38abe33ddd5dd807dccb14e80390931ea7bb7a12b02e9"
+    }
+  ],
   "outputs": [
     {
       "name": "sorted_high",
@@ -22,8 +28,8 @@
   "step_evidence": [
     {
       "step_index": 0,
-      "step_id": "790a6566f43bc73a29be7660f60fe73db08743f4a1936fbd276051d3a94c6aab",
-      "transform_id": "43a1ed8797a1fe11c7c63ce896e41537538e1cdf1461c931585441e2613a2a82",
+      "step_id": "5670bdd40fb547557cf950319c0510954cbe68c4e806453e56c7293ed923c596",
+      "transform_id": "79884bff6abcd4059efc0e09d37410609b10d2262953a67e0507586060a008b9",
       "op": "datasource",
       "inputs": [],
       "outputs": [
@@ -50,8 +56,8 @@
     },
     {
       "step_index": 2,
-      "step_id": "64297c96f101cd97fc3964bcc39c199503252604de0a5813373bac63d6c10e15",
-      "transform_id": "7bee27ff66f741a90565a4615166af3dd7b2fb3a2cc257ada0d142231363fd41",
+      "step_id": "495491f516592ad28a235258acaa34758aa4cbf22b7d967d9b6b8ddf47c4129e",
+      "transform_id": "d4b4d99e82aa17bc8eec2644d6d16035f84c171daaa3890b83dfe14f7f30b05b",
       "op": "filter",
       "inputs": [
         "__t2__"

@@ -82,3 +82,50 @@ def test_report_hash_canonicalization_drive_letters(tmp_path):
 
     parsed = json.loads(canonical_a)
     assert parsed["outputs"][0]["path"] == "c:/bundle/outputs/out.csv"
+
+
+def test_diagnostic_paths_do_not_affect_report_hash(tmp_path):
+    """
+    report_sha256 must be stable when only diagnostic-only fields change
+    (schema_lock_used_path, schema_lock_emit_path). Regression guard for thin
+    bundle determinism across machines.
+    """
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    # Minimal thin-mode report so _DIAGNOSTIC_ONLY_KEYS are excluded from canonical payload
+    report = {
+        "report_schema_version": "0.3",
+        "bundle_mode": "thin",
+        "bundle_format_version": 1,
+        "status": "ok",
+        "exit_code_bucket": 0,
+        "primary_error": None,
+        "diagnostics": [],
+        "inputs": [
+            {"role": "source", "name": "script.sans", "path": "inputs/source/script.sans", "sha256": "abc"},
+        ],
+        "datasource_inputs": [
+            {"datasource": "lb", "name": "lb.csv", "embedded": False, "sha256": "def", "size_bytes": 100, "ref": "sha256:def"},
+        ],
+        "artifacts": [{"name": "plan.ir.json", "path": "artifacts/plan.ir.json", "sha256": "ghi"}],
+        "outputs": [{"name": "out", "path": "outputs/out.csv", "sha256": "jkl", "rows": 1, "columns": ["x"]}],
+        "plan_path": "artifacts/plan.ir.json",
+        "engine": {"name": "sans", "version": "0.1.0"},
+        "settings": {"strict": True, "datasources": ["lb"]},
+        "timing": {"compile_ms": 0, "validate_ms": 0, "execute_ms": 1},
+        "runtime": {"status": "ok", "timing": {"execute_ms": 1}},
+        "schema_lock_used_path": "/home/user/proj/demo_low.schema.lock.json",
+        "schema_lock_emit_path": "/home/user/proj/out/schema.lock.json",
+    }
+    report["report_sha256"] = compute_report_sha256(report, bundle_root)
+    hash_before = compute_report_sha256(report, bundle_root)
+
+    # Mutate only diagnostic-only fields to different host-specific paths
+    report["schema_lock_used_path"] = r"C:\Users\jane\repo\demo\demo_low.schema.lock.json"
+    report["schema_lock_emit_path"] = r"C:\Users\jane\repo\dl_out\schema.lock.json"
+    hash_after = compute_report_sha256(report, bundle_root)
+
+    assert hash_before == hash_after, (
+        "report_sha256 must be unchanged when only schema_lock_used_path and "
+        "schema_lock_emit_path change; diagnostic paths must not leak into canonical payload"
+    )

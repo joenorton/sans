@@ -52,22 +52,10 @@
     {
       "name": "runtime.evidence.json",
       "path": "artifacts/runtime.evidence.json",
-      "sha256": "aa1522ffac1ef9716e20210f663e6b4c376e1dd87177428c70054fad5b207039"
+      "sha256": "82197aad9462f131c09f16cfc9ea5b63f160b1e7609a6798b9abc25e02378e18"
     }
   ],
   "outputs": [
-    {
-      "name": "sorted_high",
-      "path": "outputs/sorted_high.csv",
-      "sha256": "c29e49ad515bcdf7d515e22dde7653e1ceaeddad34f9fb5a9b4fdbe9ea00aa95",
-      "rows": 8,
-      "columns": [
-        "USUBJID",
-        "VISITNUM",
-        "A1C",
-        "label"
-      ]
-    },
     {
       "name": "sorted_high",
       "path": "outputs/sorted_high.csv",
@@ -106,8 +94,20 @@
     "lb"
   ],
   "schema_lock_missing_datasources": [],
-  "report_sha256": "6fe45ddc283746d4b3fadc80b66f25ca4ec1c1dbcb83f8c4632d3b01ad234e99",
+  "report_sha256": "3c698a6a87b5e699c1bac19fb6c6b56bab677caba343fb6799d085a00a6b1321",
   "schema_lock_auto_discovered": true,
+  "bundle_mode": "thin",
+  "bundle_format_version": 1,
+  "datasource_inputs": [
+    {
+      "datasource": "lb",
+      "name": "lb.csv",
+      "embedded": false,
+      "sha256": "d9ed13453c556bdabde38abe33ddd5dd807dccb14e80390931ea7bb7a12b02e9",
+      "size_bytes": 355,
+      "ref": "sha256:d9ed13453c556bdabde38abe33ddd5dd807dccb14e80390931ea7bb7a12b02e9"
+    }
+  ],
   "schema_lock_copied_path": "schema.lock.json",
   "runtime": {
     "status": "ok",

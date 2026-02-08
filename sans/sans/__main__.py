@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json to enforce when ingesting datasources")
     run_parser.add_argument("--emit-schema-lock", metavar="path", default=None, help="After successful run, write schema.lock.json to this path")
     run_parser.add_argument("--lock-only", action="store_true", help="With --emit-schema-lock: generate lock only, do not execute (even if all datasources are typed)")
+    run_parser.add_argument("--bundle-mode", choices=["full", "thin"], default="full", help="Bundle mode: full (embed datasource bytes) or thin (fingerprints only)")
 
     schema_lock_parser = subparsers.add_parser("schema-lock", help="Generate schema.lock.json without execution (no --out required)")
     schema_lock_parser.add_argument("script", help="Path to the script file")
@@ -192,9 +193,18 @@ def main(argv: list[str] | None = None) -> int:
                 print("failed: schema lock hash mismatch")
                 return 1
 
-        # Check inputs (bundle-relative paths only)
+        # Check inputs (mode-aware: thin mode does not require datasource files in bundle)
+        bundle_mode = report.get("bundle_mode")
+        is_thin = bundle_mode == "thin"
         for inp in report.get("inputs", []):
+            if inp.get("role") == "datasource":
+                # Datasource inventory is in datasource_inputs; skip here (checked below)
+                continue
+            # Non-datasource: require bundle-relative path and file
             path_str = inp.get("path") or ""
+            if not path_str:
+                print("failed: input entry missing path (full bundle)")
+                return 1
             rel_path = fs_path_from_report(path_str)
             if rel_path.is_absolute():
                 print(f"failed: input path must be bundle-relative: {path_str}")
@@ -202,8 +212,75 @@ def main(argv: list[str] | None = None) -> int:
             path = bundle_root / rel_path
             expected = inp.get("sha256")
             if not path.exists():
+                print(f"failed: input file missing (full bundle): {path}")
+                return 1
+            if expected:
+                actual = compute_input_hash(path)
+                if actual != expected:
+                    print(f"failed: input hash mismatch for {path}")
+                    return 1
+
+        # Check datasource_inputs (required for v2 bundles; legacy may have only inputs with role=datasource)
+        datasource_inputs = report.get("datasource_inputs") or []
+        settings_datasources = report.get("settings") or {}
+        settings_ds_list = settings_datasources.get("datasources") or []
+        if is_thin:
+            if not datasource_inputs:
+                print("failed: thin bundle must have datasource_inputs array")
+                return 1
+            for ds_name in settings_ds_list:
+                found = next((d for d in datasource_inputs if d.get("datasource") == ds_name), None)
+                if not found:
+                    print(f"failed: thin bundle missing datasource_inputs entry for: {ds_name}")
+                    return 1
+            for d in datasource_inputs:
+                if d.get("embedded") is not False:
+                    print(f"failed: thin bundle datasource_inputs entry must have embedded=false: {d.get('datasource')}")
+                    return 1
+                if not d.get("sha256"):
+                    print("failed: thin bundle datasource entry missing sha256")
+                    return 1
+                if d.get("size_bytes") is None:
+                    print("failed: thin bundle datasource entry missing size_bytes")
+                    return 1
+            data_dir = bundle_root / "inputs" / "data"
+            if data_dir.exists():
+                files_in_data = [f for f in data_dir.iterdir() if f.is_file()]
+                if files_in_data:
+                    print("failed: thin bundle must not contain files in inputs/data/")
+                    return 1
+        else:
+            for d in datasource_inputs:
+                if d.get("embedded") is True:
+                    path_str = d.get("path") or ""
+                    if not path_str:
+                        print("failed: full bundle datasource_inputs entry missing path")
+                        return 1
+                    rel_path = fs_path_from_report(path_str)
+                    path = bundle_root / rel_path
+                    if not path.exists():
+                        print(f"failed: datasource file missing: {path_str}")
+                        return 1
+                    expected = d.get("sha256")
+                    if expected:
+                        actual = compute_input_hash(path)
+                        if actual != expected:
+                            print(f"failed: datasource hash mismatch for {path_str}")
+                            return 1
+        # Legacy: inputs with role=datasource (no datasource_inputs)
+        for inp in report.get("inputs", []):
+            if inp.get("role") != "datasource":
+                continue
+            path_str = inp.get("path") or ""
+            if not path_str:
+                print("failed: input entry missing path (full bundle)")
+                return 1
+            rel_path = fs_path_from_report(path_str)
+            path = bundle_root / rel_path
+            if not path.exists():
                 print(f"failed: input file missing: {path}")
                 return 1
+            expected = inp.get("sha256")
             if expected:
                 actual = compute_input_hash(path)
                 if actual != expected:
@@ -320,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             schema_lock_path=schema_lock_path,
             emit_schema_lock_path=emit_schema_lock_path,
             lock_only=getattr(args, "lock_only", False),
+            bundle_mode=getattr(args, "bundle_mode", "full"),
         )
 
         status = report.get("status")

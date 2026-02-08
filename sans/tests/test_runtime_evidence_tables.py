@@ -7,10 +7,10 @@ from sans.runtime import run_script
 from sans.evidence import EvidenceConfig
 
 
-def _run(script: str, out_dir: Path) -> dict:
+def _run(script: str, out_dir: Path, file_name: str = "script.sans") -> dict:
     report = run_script(
         text=script,
-        file_name="script.sans",
+        file_name=file_name,
         bindings={},
         out_dir=out_dir,
         strict=True,
@@ -92,7 +92,8 @@ def test_demo_high_low_compute_table_evidence(tmp_path: Path, monkeypatch: pytes
     script_text = script_path.read_text(encoding="utf-8")
 
     monkeypatch.chdir(demo_dir)
-    ev = _run(script_text, tmp_path / "demo_low")
+    # Use real script path so schema-lock autodiscovery finds demo_low.schema.lock.json
+    ev = _run(script_text, tmp_path / "demo_low", file_name=str(script_path))
     table_with_label = next(
         name for name, info in ev["tables"].items() if "label" in (info.get("columns") or {})
     )

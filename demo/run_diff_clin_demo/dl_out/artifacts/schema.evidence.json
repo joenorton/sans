@@ -1,0 +1,51 @@
+{
+  "schema_version": "0.1",
+  "tables": {
+    "__t2__": {
+      "LBDTC": "string",
+      "LBORRES": "decimal",
+      "LBSTRESN": "decimal",
+      "LBSTRESU": "string",
+      "LBTESTCD": "string",
+      "USUBJID": "string",
+      "VISITNUM": "int"
+    },
+    "__t3__": {
+      "LBDTC": "string",
+      "LBORRES": "decimal",
+      "LBSTRESN": "decimal",
+      "LBSTRESU": "string",
+      "LBTESTCD": "string",
+      "USUBJID": "string",
+      "VISITNUM": "int"
+    },
+    "__t4__": {
+      "A1C": "decimal",
+      "LBDTC": "string",
+      "LBORRES": "decimal",
+      "LBSTRESU": "string",
+      "LBTESTCD": "string",
+      "USUBJID": "string",
+      "VISITNUM": "int"
+    },
+    "__t5__": {
+      "A1C": "decimal",
+      "LBDTC": "string",
+      "USUBJID": "string",
+      "VISITNUM": "int"
+    },
+    "__t6__": {
+      "A1C": "decimal",
+      "LBDTC": "string",
+      "USUBJID": "string",
+      "VISITNUM": "int",
+      "label": "string"
+    },
+    "sorted_high": {
+      "A1C": "decimal",
+      "USUBJID": "string",
+      "VISITNUM": "int",
+      "label": "string"
+    }
+  }
+}

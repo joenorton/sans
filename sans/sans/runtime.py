@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 import csv
+import hashlib
 import re
 from time import perf_counter
 
@@ -1451,6 +1452,7 @@ def execute_plan(
     output_format: str = "csv",
     outputs_base: Optional[Path] = None,
     schema_lock: Optional[Dict[str, Any]] = None,
+    bundle_mode: str = "full",
 ) -> ExecutionResult:
     start = perf_counter()
     diagnostics: List[RuntimeDiagnostic] = []
@@ -1528,6 +1530,8 @@ def execute_plan(
                 ds_name = params.get("name") or out_name
                 if isinstance(ds_name, str) and ds_name.startswith("__datasource__"):
                     ds_name = ds_name.replace("__datasource__", "", 1)
+                ds_sha256_for_evidence = ""
+                ds_size_for_evidence = 0
                 pinned_cols = params.get("columns")
                 if isinstance(pinned_cols, list) and not pinned_cols:
                     pinned_cols = None
@@ -1540,9 +1544,14 @@ def execute_plan(
                     if not column_types:
                         column_types = lock_entry_to_column_types(lock_entry)
                     required_columns = lock_entry_required_columns(lock_entry)
-                data_dir = out_dir / INPUTS_DATA
-                data_dir.mkdir(parents=True, exist_ok=True)
-                materialized_path = data_dir / f"{ds_name}.csv"
+                thin = bundle_mode == "thin"
+                if thin:
+                    data_dir = None
+                    materialized_path = None
+                else:
+                    data_dir = out_dir / INPUTS_DATA
+                    data_dir.mkdir(parents=True, exist_ok=True)
+                    materialized_path = data_dir / f"{ds_name}.csv"
                 if kind == "inline_csv":
                     inline_text = params.get("inline_text") or ""
                     if column_types:
@@ -1568,20 +1577,24 @@ def execute_plan(
                             _loc_to_dict(step.loc),
                         )
                     if summary:
-                        materialized_path.write_text(inline_text, encoding="utf-8")
+                        if not thin and materialized_path is not None:
+                            materialized_path.write_text(inline_text, encoding="utf-8")
                         coercion_diagnostics.append({
                             "datasource": ds_name,
-                            "path": bundle_relative_path(materialized_path, out_dir),
+                            "path": bundle_relative_path(materialized_path, out_dir) if materialized_path else f"inline:{ds_name}",
                             "total_rows_scanned": summary["total_rows_scanned"],
                             "columns": summary["columns"],
                             "truncated": summary.get("truncated", False),
                         })
+                        inline_bytes = inline_text.encode("utf-8")
                         datasource_evidence.append({
                             "name": ds_name,
                             "table_id": out_name,
                             "kind": kind,
-                            "path": str(materialized_path),
+                            "path": str(materialized_path) if materialized_path else f"inline:{ds_name}",
                             "columns": list(headers),
+                            "sha256": hashlib.sha256(inline_bytes).hexdigest(),
+                            "size_bytes": len(inline_bytes),
                         })
                         raise RuntimeFailure(
                             "E_CSV_COERCE",
@@ -1589,10 +1602,14 @@ def execute_plan(
                             _loc_to_dict(step.loc),
                         )
                     tables[out_name] = rows_d
-                    if rows_d:
-                        _write_csv(materialized_path, rows_d)
-                    else:
-                        materialized_path.write_text("", encoding="utf-8")
+                    if not thin and materialized_path is not None:
+                        if rows_d:
+                            _write_csv(materialized_path, rows_d)
+                        else:
+                            materialized_path.write_text("", encoding="utf-8")
+                    inline_bytes = inline_text.encode("utf-8")
+                    ds_sha256_for_evidence = hashlib.sha256(inline_bytes).hexdigest()
+                    ds_size_for_evidence = len(inline_bytes)
                     datasource_schemas[out_name] = list(headers)
                 else:
                     path_str = params.get("path") or ""
@@ -1625,13 +1642,19 @@ def execute_plan(
                                 _loc_to_dict(step.loc),
                             )
                         tables[out_name] = rows_d
-                        materialized_path = data_dir / f"{ds_name}.xpt"
-                        import shutil
-                        shutil.copy2(path, materialized_path)
+                        if not thin and data_dir is not None:
+                            materialized_path = data_dir / f"{ds_name}.xpt"
+                            import shutil
+                            shutil.copy2(path, materialized_path)
+                        else:
+                            materialized_path = path
                         datasource_schemas[out_name] = list(headers)
                     else:
-                        import shutil
-                        shutil.copy2(path, materialized_path)
+                        if not thin and data_dir is not None and materialized_path is not None:
+                            import shutil
+                            shutil.copy2(path, materialized_path)
+                        else:
+                            materialized_path = path
                         if column_types:
                             rows_d, headers, summary = _load_csv_with_header_typed(
                                 path, column_types, required_columns=required_columns
@@ -1655,9 +1678,13 @@ def execute_plan(
                                 _loc_to_dict(step.loc),
                             )
                         if summary:
+                            try:
+                                path_for_diag = bundle_relative_path(materialized_path, out_dir) if materialized_path else f"inline:{ds_name}"
+                            except ValueError:
+                                path_for_diag = str(materialized_path)
                             coercion_diagnostics.append({
                                 "datasource": ds_name,
-                                "path": bundle_relative_path(materialized_path, out_dir),
+                                "path": path_for_diag,
                                 "total_rows_scanned": summary["total_rows_scanned"],
                                 "columns": summary["columns"],
                                 "truncated": summary.get("truncated", False),
@@ -1666,8 +1693,10 @@ def execute_plan(
                                 "name": ds_name,
                                 "table_id": out_name,
                                 "kind": kind,
-                                "path": str(materialized_path),
+                                "path": str(materialized_path) if materialized_path else f"inline:{ds_name}",
                                 "columns": list(headers),
+                                "sha256": (compute_input_hash(path) or ""),
+                                "size_bytes": path.stat().st_size,
                             })
                             raise RuntimeFailure(
                                 "E_CSV_COERCE",
@@ -1676,12 +1705,19 @@ def execute_plan(
                             )
                         tables[out_name] = rows_d
                         datasource_schemas[out_name] = list(headers)
+                        read_path = path if thin else materialized_path
+                        if read_path is not None:
+                            ds_sha256_for_evidence = compute_input_hash(read_path) or ""
+                            ds_size_for_evidence = read_path.stat().st_size
+                evidence_path_str = str(materialized_path) if materialized_path else f"inline:{ds_name}"
                 datasource_evidence.append({
                     "name": ds_name,
                     "table_id": out_name,
                     "kind": kind,
-                    "path": str(materialized_path),
+                    "path": evidence_path_str,
                     "columns": list(datasource_schemas.get(out_name, [])),
+                    "sha256": ds_sha256_for_evidence,
+                    "size_bytes": ds_size_for_evidence,
                 })
                 t_id = compute_transform_id(op, step.params)
                 step_evidence.append({
@@ -2064,6 +2100,9 @@ def generate_schema_lock_standalone(
             legacy_sas=legacy_sas,
             lock_generation_only=True,
         )
+        report["bundle_mode"] = "full"
+        report["bundle_format_version"] = 1
+        report["datasource_inputs"] = report.get("datasource_inputs") or []
         if report.get("status") == "refused":
             if out_dir:
                 (work_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -2142,21 +2181,28 @@ def generate_schema_lock_standalone(
                         dest = data_dir / f"{ds_name}{src.suffix}"
                         shutil.copy2(src, dest)
                         rel = bundle_relative_path(dest, work_dir)
-                        report["inputs"].append({
-                            "role": "datasource",
-                            "name": ds_name,
-                            "path": rel,
+                        report["datasource_inputs"].append({
+                            "datasource": ds_name,
+                            "name": f"{ds_name}{src.suffix}",
+                            "embedded": True,
                             "sha256": compute_input_hash(dest) or "",
+                            "size_bytes": src.stat().st_size,
+                            "path": rel,
                         })
                 elif ds.kind == "inline_csv" and (ds.inline_text or "").strip():
+                    raw = (ds.inline_text or "").encode("utf-8")
+                    h = hashlib.sha256(raw).hexdigest()
+                    size_bytes = len(raw)
                     dest = data_dir / f"{ds_name}.csv"
                     dest.write_text(ds.inline_text or "", encoding="utf-8")
                     rel = bundle_relative_path(dest, work_dir)
-                    report["inputs"].append({
-                        "role": "datasource",
-                        "name": ds_name,
+                    report["datasource_inputs"].append({
+                        "datasource": ds_name,
+                        "name": f"{ds_name}.csv",
+                        "embedded": True,
+                        "sha256": compute_input_hash(dest) or h,
+                        "size_bytes": size_bytes,
                         "path": rel,
-                        "sha256": compute_input_hash(dest) or "",
                     })
             report["report_sha256"] = compute_report_sha256(report, work_dir)
             (work_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -2199,6 +2245,7 @@ def run_script(
     schema_lock_path: Optional[Path] = None,
     emit_schema_lock_path: Optional[Path] = None,
     lock_only: bool = False,
+    bundle_mode: str = "full",
 ) -> Dict[str, Any]:
     out_path = Path(out_dir).resolve()
     resolved_emit_lock_path = _resolve_emit_schema_lock_path(emit_schema_lock_path, out_path)
@@ -2220,6 +2267,9 @@ def run_script(
             ensure_bundle_layout(out_path)
             report = {
                 "report_schema_version": "0.3",
+                "bundle_mode": bundle_mode,
+                "bundle_format_version": 1,
+                "datasource_inputs": [],
                 "status": "failed",
                 "exit_code_bucket": 50,
                 "primary_error": None,
@@ -2249,6 +2299,9 @@ def run_script(
             ensure_bundle_layout(out_path)
             report = {
                 "report_schema_version": "0.3",
+                "bundle_mode": bundle_mode,
+                "bundle_format_version": 1,
+                "datasource_inputs": [],
                 "status": "failed",
                 "exit_code_bucket": 50,
                 "primary_error": None,
@@ -2317,6 +2370,9 @@ def run_script(
                     script_name = Path(file_name).name or "script.sans"
                     report = {
                         "report_schema_version": "0.3",
+                        "bundle_mode": bundle_mode,
+                        "bundle_format_version": 1,
+                        "datasource_inputs": [],
                         "status": "refused",
                         "exit_code_bucket": 50,
                         "primary_error": {
@@ -2369,6 +2425,9 @@ def run_script(
     # Autodiscovery visibility: report always has schema_lock_auto_discovered (true when lock was autodiscovered).
     # When a lock was used (explicit or autodiscovered), compiler already set schema_lock_used_path and schema_lock_sha256.
     report["schema_lock_auto_discovered"] = schema_lock_auto_discovered
+    report["bundle_mode"] = bundle_mode
+    report["bundle_format_version"] = 1
+    report["datasource_inputs"] = report.get("datasource_inputs") or []
 
     # If compilation/validation refused, annotate runtime and exit.
     if report.get("status") == "refused":
@@ -2438,9 +2497,10 @@ def run_script(
                 report["schema_lock_path"] = bundle_relative_path(resolved_emit_lock_path, out_path)
             except ValueError:
                 report["schema_lock_path"] = str(resolved_emit_lock_path)
-            # Stage referenced datasource files into out_dir/inputs for a complete bundle
+            # Stage referenced datasource files into out_dir/inputs (or record fingerprints only in thin mode)
             data_dir = out_path / INPUTS_DATA
-            data_dir.mkdir(parents=True, exist_ok=True)
+            if bundle_mode == "full":
+                data_dir.mkdir(parents=True, exist_ok=True)
             for ds_name in referenced:
                 ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
                 if not ds or ds.kind not in ("csv", "inline_csv"):
@@ -2448,25 +2508,54 @@ def run_script(
                 if ds.kind == "csv":
                     src = _resolve_datasource_path_for_inference(file_name, ds)
                     if src and src.exists():
-                        dest = data_dir / f"{ds_name}{src.suffix}"
-                        shutil.copy2(src, dest)
-                        rel = bundle_relative_path(dest, out_path)
-                        report["inputs"].append({
-                            "role": "datasource",
-                            "name": ds_name,
-                            "path": rel,
-                            "sha256": compute_input_hash(dest) or "",
-                        })
+                        if bundle_mode == "full":
+                            dest = data_dir / f"{ds_name}{src.suffix}"
+                            shutil.copy2(src, dest)
+                            rel = bundle_relative_path(dest, out_path)
+                            report["datasource_inputs"].append({
+                                "datasource": ds_name,
+                                "name": f"{ds_name}{src.suffix}",
+                                "embedded": True,
+                                "sha256": compute_input_hash(dest) or "",
+                                "size_bytes": src.stat().st_size,
+                                "path": rel,
+                            })
+                        else:
+                            h = compute_input_hash(src) or ""
+                            report["datasource_inputs"].append({
+                                "datasource": ds_name,
+                                "name": f"{ds_name}{src.suffix}",
+                                "embedded": False,
+                                "sha256": h,
+                                "size_bytes": src.stat().st_size,
+                                "ref": f"sha256:{h}",
+                            })
                 elif ds.kind == "inline_csv" and (ds.inline_text or "").strip():
-                    dest = data_dir / f"{ds_name}.csv"
-                    dest.write_text(ds.inline_text or "", encoding="utf-8")
-                    rel = bundle_relative_path(dest, out_path)
-                    report["inputs"].append({
-                        "role": "datasource",
-                        "name": ds_name,
-                        "path": rel,
-                        "sha256": compute_input_hash(dest) or "",
-                    })
+                    raw = (ds.inline_text or "").encode("utf-8")
+                    h = hashlib.sha256(raw).hexdigest()
+                    size_bytes = len(raw)
+                    if bundle_mode == "full":
+                        data_dir.mkdir(parents=True, exist_ok=True)
+                        dest = data_dir / f"{ds_name}.csv"
+                        dest.write_text(ds.inline_text or "", encoding="utf-8")
+                        rel = bundle_relative_path(dest, out_path)
+                        report["datasource_inputs"].append({
+                            "datasource": ds_name,
+                            "name": f"{ds_name}.csv",
+                            "embedded": True,
+                            "sha256": compute_input_hash(dest) or h,
+                            "size_bytes": size_bytes,
+                            "path": rel,
+                        })
+                    else:
+                        report["datasource_inputs"].append({
+                            "datasource": ds_name,
+                            "name": f"{ds_name}.csv",
+                            "embedded": False,
+                            "sha256": h,
+                            "size_bytes": size_bytes,
+                            "ref": f"sha256:{h}",
+                        })
             report["status"] = "ok"
             report["exit_code_bucket"] = 0
             report["primary_error"] = None
@@ -2494,6 +2583,9 @@ def run_script(
                 legacy_sas=legacy_sas,
                 lock_generation_only=False,
             )
+            report["bundle_mode"] = bundle_mode
+            report["bundle_format_version"] = 1
+            report["datasource_inputs"] = report.get("datasource_inputs") or []
             if report.get("status") == "refused":
                 report["runtime"] = {"status": "refused", "timing": {"execute_ms": None}}
                 report_path = out_path / "report.json"
@@ -2538,7 +2630,8 @@ def run_script(
 
         if bindings:
             data_dir = out_path / INPUTS_DATA
-            data_dir.mkdir(parents=True, exist_ok=True)
+            if bundle_mode == "full":
+                data_dir.mkdir(parents=True, exist_ok=True)
             for name, path_str in bindings.items():
                 p = Path(path_str)
                 if not p.exists():
@@ -2546,13 +2639,32 @@ def run_script(
                         "SANS_RUNTIME_INPUT_NOT_FOUND",
                         f"Input table '{name}' file not found: {path_str}",
                     )
-                dest = data_dir / f"{name}{p.suffix}"
-                import shutil
-                shutil.copy2(p, dest)
-                bindings_in[name] = str(dest)
-                rel = bundle_relative_path(dest, out_path)
-                h = compute_input_hash(dest) or ""
-                report["inputs"].append({"role": "datasource", "name": name, "path": rel, "sha256": h})
+                h = compute_input_hash(p) or ""
+                size_bytes = p.stat().st_size
+                if bundle_mode == "full":
+                    import shutil
+                    dest = data_dir / f"{name}{p.suffix}"
+                    shutil.copy2(p, dest)
+                    bindings_in[name] = str(dest)
+                    rel = bundle_relative_path(dest, out_path)
+                    report["datasource_inputs"].append({
+                        "datasource": name,
+                        "name": f"{name}{p.suffix}",
+                        "embedded": True,
+                        "sha256": compute_input_hash(dest) or h,
+                        "size_bytes": size_bytes,
+                        "path": rel,
+                    })
+                else:
+                    bindings_in[name] = path_str
+                    report["datasource_inputs"].append({
+                        "datasource": name,
+                        "name": f"{name}{p.suffix}",
+                        "embedded": False,
+                        "sha256": h,
+                        "size_bytes": size_bytes,
+                        "ref": f"sha256:{h}",
+                    })
 
         result = execute_plan(
             irdoc,
@@ -2561,6 +2673,7 @@ def run_script(
             output_format=output_format,
             outputs_base=out_path / OUTPUTS,
             schema_lock=schema_lock,
+            bundle_mode=bundle_mode,
         )
     except RuntimeFailure as err:
         report["runtime"] = {"status": "failed", "timing": {"execute_ms": None}}
@@ -2612,9 +2725,10 @@ def run_script(
         report["exit_code_bucket"] = 0
         report["primary_error"] = None
 
-    # Build report["outputs"] from result.outputs (bundle-relative paths, required sha256)
+    # Build report["outputs"] from result.outputs (bundle-relative paths, required sha256); dedupe by (name, path)
     bundle_root = out_path
     report["outputs"] = []
+    seen_output_keys: set[tuple[str, str]] = set()
     for out in result.outputs:
         abs_path = Path(out["path"]).resolve()
         try:
@@ -2626,6 +2740,10 @@ def run_script(
         h = compute_artifact_hash(abs_path)
         if not h:
             h = compute_raw_hash(abs_path) or ""
+        out_key = (out["table"], rel_posix)
+        if out_key in seen_output_keys:
+            continue
+        seen_output_keys.add(out_key)
         report["outputs"].append({
             "name": out["table"],
             "path": rel_posix,
@@ -2633,6 +2751,29 @@ def run_script(
             "rows": out["rows"],
             "columns": out["columns"],
         })
+
+    # Populate datasource_inputs from execution when not already set by bindings (script-resolved datasources)
+    existing_ds = {d["datasource"] for d in report.get("datasource_inputs", [])}
+    if result.datasource_evidence:
+        for e in sorted(result.datasource_evidence, key=lambda x: x.get("name", "")):
+            if e["name"] in existing_ds:
+                continue
+            existing_ds.add(e["name"])
+            entry = {
+                "datasource": e["name"],
+                "name": e["name"] + ".csv",
+                "embedded": bundle_mode == "full",
+                "sha256": e.get("sha256", ""),
+                "size_bytes": e.get("size_bytes", 0),
+            }
+            if bundle_mode == "full":
+                try:
+                    entry["path"] = bundle_relative_path(Path(e["path"]), bundle_root)
+                except (ValueError, TypeError):
+                    entry["path"] = str(e.get("path", ""))
+            else:
+                entry["ref"] = f"sha256:{e.get('sha256', '')}"
+            report["datasource_inputs"].append(entry)
 
     # Rebuild vars.graph.json with runtime-resolved datasource schemas (if available).
     vars_graph_path = out_path / ARTIFACTS / "vars.graph.json"
@@ -2705,7 +2846,11 @@ def run_script(
         datasources = {}
         for entry in sorted(result.datasource_evidence, key=lambda e: e.get("name", "")):
             abs_path = Path(entry["path"]).resolve()
-            rel_path = bundle_relative_path(abs_path, bundle_root)
+            try:
+                rel_path = bundle_relative_path(abs_path, bundle_root)
+            except ValueError:
+                # Thin mode: path is outside bundle; use reference placeholder
+                rel_path = f"inputs/data/{entry.get('name', '')}.csv"
             datasources[entry["name"]] = {
                 "kind": entry.get("kind"),
                 "path": rel_path,
@@ -2736,6 +2881,12 @@ def run_script(
                 "path": inp.get("path"),
                 "sha256": inp.get("sha256"),
             })
+    for d in report.get("datasource_inputs", []):
+        evidence["inputs"].append({
+            "name": d.get("datasource"),
+            "path": d.get("path"),
+            "sha256": d.get("sha256"),
+        })
 
     evidence_path = out_path / ARTIFACTS / "runtime.evidence.json"
     evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
