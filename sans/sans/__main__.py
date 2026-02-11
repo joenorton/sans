@@ -456,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
                 bindings[name] = path.strip()
         try:
             sans_ir = json.loads(script_path.read_text(encoding="utf-8"))
-            validate_sans_ir(sans_ir)
+            # Execution gate: strict by default for optimizer/runtime safety.
+            validate_sans_ir(sans_ir, strict=bool(getattr(args, "strict", True)))
             ir_doc = sans_ir_to_irdoc(sans_ir, file_name=str(script_path))
         except OSError as exc:
             return _write_failed_report(out_dir, str(exc))
