@@ -2,9 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional, List, Dict
 
-from ._loc import Loc
-from .type_infer import TypeInferenceError, infer_table_schema_types
-from .types import Type
+from .._loc import Loc
+from ..type_infer import TypeInferenceError, infer_table_schema_types
+from ..types import Type
 
 
 # -----------------------------------------------------------------------------
@@ -650,3 +650,24 @@ class IRDoc:
             )
 
         return current_table_facts
+
+
+__all__ = [
+    "DATASOURCE_PREFIX",
+    "AGGREGATE_ALLOWED_OPS",
+    "CAST_ALLOWED_TYPES",
+    "DatasourceDecl",
+    "IRDoc",
+    "OpStep",
+    "Step",
+    "TableFact",
+    "UnknownBlockStep",
+    "ds_input",
+    "is_ds_input",
+    "ds_name_from_input",
+    "normalize_sort_by",
+    "normalize_select_cols",
+    "normalize_rename_mapping",
+    "normalize_cast_params",
+    "normalize_aggregate_params",
+]

@@ -106,3 +106,71 @@ def test_cli_check_refused_validate_exit_code():
         assert report["exit_code_bucket"] == 31
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_cli_ir_validate_ok_exit_code():
+    temp_dir = _make_local_temp_dir()
+    try:
+        ir_path = temp_dir / "ok.sans.ir"
+        ir_path.write_text(
+            json.dumps(
+                {
+                    "version": "0.1",
+                    "datasources": {"lb": {"kind": "csv", "path": "lb.csv", "columns": {"a": "int"}}},
+                    "steps": [
+                        {
+                            "id": "ds:lb",
+                            "op": "datasource",
+                            "inputs": [],
+                            "outputs": ["__datasource__lb"],
+                            "params": {"name": "lb", "kind": "csv", "path": "lb.csv"},
+                        },
+                        {
+                            "id": "out:t",
+                            "op": "identity",
+                            "inputs": ["__datasource__lb"],
+                            "outputs": ["t"],
+                            "params": {},
+                        },
+                        {
+                            "id": "out:t:save",
+                            "op": "save",
+                            "inputs": ["t"],
+                            "outputs": [],
+                            "params": {"path": "t.csv"},
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "sans", "ir-validate", str(ir_path)],
+            cwd=_project_root(),
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "ok: valid sans.ir" in result.stderr
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_cli_ir_validate_invalid_exit_code():
+    temp_dir = _make_local_temp_dir()
+    try:
+        ir_path = temp_dir / "bad.sans.ir"
+        ir_path.write_text(
+            json.dumps({"version": "0.1", "datasources": {}, "steps": []}),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "sans", "ir-validate", str(ir_path)],
+            cwd=_project_root(),
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2
+        assert "invalid:" in result.stderr
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

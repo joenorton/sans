@@ -10,6 +10,9 @@ from .runtime import run_script, RuntimeFailure
 from .validator_sdtm import validate_sdtm
 from .fmt import FMT_STYLE_ID, format_text, normalize_newlines
 from . import __version__ as _engine_version
+from .ir.adapter import sans_ir_to_irdoc
+from .ir.schema import validate_sans_ir
+from .sans_script import irdoc_to_expanded_sans
 
 
 def _parse_tables(tables_arg: str | None) -> set[str] | None:
@@ -118,6 +121,22 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--emit-schema-lock", metavar="path", default=None, help="After successful run, write schema.lock.json to this path")
     run_parser.add_argument("--lock-only", action="store_true", help="With --emit-schema-lock: generate lock only, do not execute (even if all datasources are typed)")
     run_parser.add_argument("--bundle-mode", choices=["full", "thin"], default="full", help="Bundle mode: full (embed datasource bytes) or thin (fingerprints only)")
+
+    run_ir_parser = subparsers.add_parser("run-ir", help="Execute a canonical sans.ir file")
+    run_ir_parser.add_argument("script", help="Path to the sans.ir file")
+    run_ir_parser.add_argument("--out", required=True, help="Output directory for plan/report and outputs")
+    run_ir_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
+    run_ir_parser.add_argument("--format", default="csv", choices=["csv", "xpt"], help="Output format (csv, xpt)")
+    run_ir_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
+    run_ir_parser.add_argument("--no-strict", dest="strict", action="store_false")
+    run_ir_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json to enforce when ingesting datasources")
+    run_ir_parser.add_argument("--emit-schema-lock", metavar="path", default=None, help="After successful run, write schema.lock.json to this path")
+    run_ir_parser.add_argument("--lock-only", action="store_true", help="With --emit-schema-lock: generate lock only, do not execute (even if all datasources are typed)")
+    run_ir_parser.add_argument("--bundle-mode", choices=["full", "thin"], default="full", help="Bundle mode: full (embed datasource bytes) or thin (fingerprints only)")
+
+    ir_validate_parser = subparsers.add_parser("ir-validate", help="Validate sans.ir structure only")
+    ir_validate_parser.add_argument("script", help="Path to the sans.ir file")
+    ir_validate_parser.add_argument("--strict", action="store_true", default=False, help="Treat structural warnings as errors")
 
     schema_lock_parser = subparsers.add_parser("schema-lock", help="Generate schema.lock.json without execution (no --out required)")
     schema_lock_parser.add_argument("script", help="Path to the script file")
@@ -419,6 +438,84 @@ def main(argv: list[str] | None = None) -> int:
                 suffix = " (lock-only)" if mode == "generated_only" else " (after run)"
                 print(f"ok: wrote schema lock to {emit_path}{suffix}")
         return int(report.get("exit_code_bucket", 50))
+
+    if args.command == "run-ir":
+        script_path = Path(args.script)
+        out_dir = Path(args.out)
+        bindings = {}
+        if args.tables:
+            for item in args.tables.split(","):
+                if not item.strip():
+                    continue
+                if "=" not in item:
+                    return _write_failed_report(out_dir, f"Invalid table binding '{item}'")
+                name, path = item.split("=", 1)
+                name = name.strip()
+                if name in bindings:
+                    return _write_failed_report(out_dir, f"Duplicate table binding for '{name}'")
+                bindings[name] = path.strip()
+        try:
+            sans_ir = json.loads(script_path.read_text(encoding="utf-8"))
+            validate_sans_ir(sans_ir)
+            ir_doc = sans_ir_to_irdoc(sans_ir, file_name=str(script_path))
+        except OSError as exc:
+            return _write_failed_report(out_dir, str(exc))
+        except Exception as exc:
+            return _write_failed_report(out_dir, f"Invalid sans.ir: {exc}")
+
+        # Reuse existing run path and runtime core by rendering canonical expanded.sans
+        # from IR, then executing as a normal .sans script.
+        expanded = irdoc_to_expanded_sans(ir_doc)
+        virtual_script_path = script_path.with_suffix(".expanded.sans")
+        schema_lock_path = Path(args.schema_lock) if args.schema_lock else None
+        emit_schema_lock_path = Path(args.emit_schema_lock) if args.emit_schema_lock else None
+        report = run_script(
+            text=expanded,
+            file_name=str(virtual_script_path),
+            bindings=bindings,
+            out_dir=out_dir,
+            strict=args.strict,
+            output_format=args.format,
+            include_roots=None,
+            allow_absolute_includes=False,
+            allow_include_escape=False,
+            legacy_sas=False,
+            schema_lock_path=schema_lock_path,
+            emit_schema_lock_path=emit_schema_lock_path,
+            lock_only=getattr(args, "lock_only", False),
+            bundle_mode=getattr(args, "bundle_mode", "full"),
+        )
+        status = report.get("status")
+        if status == "refused":
+            primary = report.get("primary_error") or {}
+            loc = primary.get("loc") or {}
+            loc_str = f"{loc.get('file')}:{loc.get('line_start')}" if loc else ""
+            print(f"refused: {primary.get('code')} at {loc_str}".rstrip())
+        elif status == "failed":
+            primary = report.get("primary_error") or {}
+            loc = primary.get("loc") or {}
+            loc_str = f"{loc.get('file')}:{loc.get('line_start')}" if loc else ""
+            print(f"failed: {primary.get('code')} at {loc_str}".rstrip())
+        else:
+            print("ok: wrote plan.ir.json report.json registry.candidate.json runtime.evidence.json")
+        return int(report.get("exit_code_bucket", 50))
+
+    if args.command == "ir-validate":
+        script_path = Path(args.script)
+        try:
+            sans_ir = json.loads(script_path.read_text(encoding="utf-8"))
+            warnings = validate_sans_ir(sans_ir, strict=bool(getattr(args, "strict", False)))
+        except OSError as exc:
+            print(f"invalid: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"invalid: {exc}", file=sys.stderr)
+            return 2
+        if warnings:
+            print(f"ok: valid sans.ir ({len(warnings)} warning(s))", file=sys.stderr)
+        else:
+            print("ok: valid sans.ir", file=sys.stderr)
+        return 0
 
     if args.command == "schema-lock":
         from .runtime import generate_schema_lock_standalone
