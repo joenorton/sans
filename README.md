@@ -50,19 +50,30 @@ Verify a script without executing it. Emits the execution plan (`plan.ir.json`) 
 sans check example.sans --out out
 ```
 
-### 3. Execute
+### 3. Emit Canonical `sans.ir`
+Generate deterministic canonical `sans.ir` directly from a script using the same compile/check path as `sans check`.
+```bash
+sans emit-ir example.sans --out out/example.sans.ir
+sans ir-validate --strict out/example.sans.ir
+```
+Use `--cwd` to set the compilation working directory (for relative paths in script context):
+```bash
+sans emit-ir script.expanded.sans --out out/script.sans.ir --cwd fixtures/inputs
+```
+
+### 4. Execute
 Compile, validate, and run. Emits output tables (CSV/XPT) and the final signed manifest.
 ```bash
 sans run example.sans --out out
 ```
 
-### 4. Verify
+### 5. Verify
 Verify that a previously generated report matches the current state of files on disk.
 ```bash
 sans verify out/report.json
 ```
 
-### 5. Format
+### 6. Format
 Canonicalize `.sans` formatting (presentation only).
 ```bash
 sans fmt example.sans

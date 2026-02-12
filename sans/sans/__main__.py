@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import sys
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from .compiler import emit_check_artifacts
@@ -11,7 +14,8 @@ from .validator_sdtm import validate_sdtm
 from .fmt import FMT_STYLE_ID, format_text, normalize_newlines
 from . import __version__ as _engine_version
 from .ir.adapter import sans_ir_to_irdoc
-from .ir.schema import validate_sans_ir
+from .ir.normalize import irdoc_to_sans_ir
+from .ir.schema import validate_sans_ir, canonical_json_dumps
 from .sans_script import irdoc_to_expanded_sans
 
 
@@ -20,6 +24,19 @@ def _parse_tables(tables_arg: str | None) -> set[str] | None:
         return None
     tables = [t.strip() for t in tables_arg.split(",") if t.strip()]
     return set(tables) if tables else None
+
+
+@contextmanager
+def _temporary_cwd(new_cwd: Path | None):
+    if new_cwd is None:
+        yield
+        return
+    previous = Path.cwd()
+    os.chdir(new_cwd)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 def _write_failed_report(out_dir: Path, message: str) -> int:
@@ -133,6 +150,14 @@ def main(argv: list[str] | None = None) -> int:
     run_ir_parser.add_argument("--emit-schema-lock", metavar="path", default=None, help="After successful run, write schema.lock.json to this path")
     run_ir_parser.add_argument("--lock-only", action="store_true", help="With --emit-schema-lock: generate lock only, do not execute (even if all datasources are typed)")
     run_ir_parser.add_argument("--bundle-mode", choices=["full", "thin"], default="full", help="Bundle mode: full (embed datasource bytes) or thin (fingerprints only)")
+
+    emit_ir_parser = subparsers.add_parser("emit-ir", help="Compile/check and emit canonical sans.ir")
+    emit_ir_parser.add_argument("script", help="Path to the script file")
+    emit_ir_parser.add_argument("--out", required=True, help="Path to write canonical sans.ir")
+    emit_ir_parser.add_argument("--cwd", default=None, help="Working directory for compile/check path resolution")
+    emit_ir_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
+    emit_ir_parser.add_argument("--no-strict", dest="strict", action="store_false")
+    emit_ir_parser.add_argument("--json", action="store_true", default=False, help="Print machine-readable result JSON")
 
     ir_validate_parser = subparsers.add_parser("ir-validate", help="Validate sans.ir structure only")
     ir_validate_parser.add_argument("script", help="Path to the sans.ir file")
@@ -500,6 +525,90 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("ok: wrote plan.ir.json report.json registry.candidate.json runtime.evidence.json")
         return int(report.get("exit_code_bucket", 50))
+
+    if args.command == "emit-ir":
+        invoked_cwd = Path.cwd()
+        compile_cwd = Path(args.cwd).resolve() if args.cwd else None
+        if compile_cwd is not None and not compile_cwd.is_dir():
+            message = f"Working directory not found: {compile_cwd}"
+            if args.json:
+                print(json.dumps({"ok": False, "error": message}, separators=(",", ":"), ensure_ascii=True))
+            else:
+                print(f"failed: {message}")
+            return 1
+
+        script_arg = Path(args.script)
+        if script_arg.is_absolute():
+            script_path = script_arg
+        else:
+            script_path = (invoked_cwd / script_arg)
+            if not script_path.exists() and compile_cwd is not None:
+                script_path = compile_cwd / script_arg
+        script_path = script_path.resolve()
+
+        out_arg = Path(args.out)
+        out_path = out_arg if out_arg.is_absolute() else (invoked_cwd / out_arg).resolve()
+
+        with _temporary_cwd(compile_cwd):
+            try:
+                text = script_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                if args.json:
+                    print(json.dumps({"ok": False, "error": str(exc)}, separators=(",", ":"), ensure_ascii=True))
+                else:
+                    print(f"failed: {exc}")
+                return 1
+
+            with tempfile.TemporaryDirectory(prefix="sans-emit-ir-") as temp_out:
+                irdoc, report = emit_check_artifacts(
+                    text=text,
+                    file_name=str(script_path),
+                    tables=None,
+                    out_dir=temp_out,
+                    strict=bool(getattr(args, "strict", True)),
+                    include_roots=None,
+                    allow_absolute_includes=False,
+                    allow_include_escape=False,
+                    legacy_sas=False,
+                )
+
+            status = report.get("status")
+            if status != "ok":
+                primary = report.get("primary_error") or {}
+                code = primary.get("code")
+                message = primary.get("message") or "compile/check failed"
+                if code and code not in message:
+                    message = f"{code}: {message}"
+                if args.json:
+                    print(json.dumps({"ok": False, "error": message}, separators=(",", ":"), ensure_ascii=True))
+                else:
+                    print(f"failed: {message}")
+                return int(report.get("exit_code_bucket", 50)) or 1
+
+            try:
+                emitted = irdoc_to_sans_ir(irdoc)
+                validate_sans_ir(emitted, strict=bool(getattr(args, "strict", True)))
+            except Exception as exc:
+                message = f"Invalid sans.ir: {exc}"
+                if args.json:
+                    print(json.dumps({"ok": False, "error": message}, separators=(",", ":"), ensure_ascii=True))
+                else:
+                    print(f"failed: {message}")
+                return 2
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(canonical_json_dumps(emitted), encoding="utf-8")
+            if args.json:
+                print(
+                    json.dumps(
+                        {"ok": True, "out_path": str(out_path), "warnings": []},
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                    )
+                )
+            else:
+                print(f"ok: wrote {out_path}")
+            return 0
 
     if args.command == "ir-validate":
         script_path = Path(args.script)
