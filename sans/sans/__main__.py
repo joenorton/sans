@@ -7,6 +7,7 @@ import os
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from .compiler import emit_check_artifacts
 from .runtime import run_script, RuntimeFailure
@@ -19,11 +20,105 @@ from .ir.schema import validate_sans_ir, canonical_json_dumps
 from .sans_script import irdoc_to_expanded_sans
 
 
-def _parse_tables(tables_arg: str | None) -> set[str] | None:
+class TableFlagError(ValueError):
+    pass
+
+
+def _parse_table_names(tables_arg: str | None) -> set[str] | None:
     if not tables_arg:
         return None
     tables = [t.strip() for t in tables_arg.split(",") if t.strip()]
     return set(tables) if tables else None
+
+
+def _parse_table_bindings(tables_arg: str | None) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    if not tables_arg:
+        return bindings
+    for item in tables_arg.split(","):
+        if not item.strip():
+            continue
+        if "=" not in item:
+            raise TableFlagError(f"Invalid table binding '{item}'")
+        name, path = item.split("=", 1)
+        name = name.strip()
+        if name in bindings:
+            raise TableFlagError(f"Duplicate table binding for '{name}'")
+        bindings[name] = path.strip()
+    return bindings
+
+
+def _scan_inputs_dir_csv_bindings(inputs_dir_arg: str) -> list[tuple[str, str]]:
+    inputs_dir = Path(inputs_dir_arg).expanduser().resolve()
+    if not inputs_dir.exists():
+        raise TableFlagError(f"Inputs directory not found: {inputs_dir}")
+    if not inputs_dir.is_dir():
+        raise TableFlagError(f"Inputs directory is not a directory: {inputs_dir}")
+
+    bindings: list[tuple[str, str]] = []
+    seen_names: dict[str, str] = {}
+    for entry in sorted(inputs_dir.iterdir(), key=lambda p: p.name):
+        if entry.is_symlink():
+            raise TableFlagError(f"symlink not allowed in inputs-dir: {entry.name}")
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() != ".csv":
+            continue
+        table_name = entry.stem
+        key = table_name.casefold()
+        if key in seen_names:
+            raise TableFlagError(f"duplicate table name from inputs-dir: {key}")
+        seen_names[key] = entry.name
+        bindings.append((table_name, str(entry.resolve())))
+    if not bindings:
+        raise TableFlagError(f"inputs-dir has no .csv files: {inputs_dir}")
+    return bindings
+
+
+def resolve_tables_from_flags(args: argparse.Namespace, mode: str) -> set[str] | dict[str, str] | None:
+    tables_arg = getattr(args, "tables", "")
+    inputs_dir_arg = getattr(args, "inputs_dir", None)
+
+    if tables_arg and inputs_dir_arg:
+        raise TableFlagError("choose one: --tables or --inputs-dir")
+
+    if mode == "names":
+        if inputs_dir_arg:
+            scanned = _scan_inputs_dir_csv_bindings(str(inputs_dir_arg))
+            return {name for name, _ in scanned}
+        return _parse_table_names(tables_arg)
+
+    if mode == "bindings":
+        if inputs_dir_arg:
+            scanned = _scan_inputs_dir_csv_bindings(str(inputs_dir_arg))
+            return {name: path for name, path in scanned}
+        return _parse_table_bindings(tables_arg)
+
+    raise ValueError(f"unknown table resolution mode: {mode}")
+
+
+def _resolve_verify_datasource_expectations(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    expected: dict[str, dict[str, Any]] = {}
+    for entry in report.get("datasource_inputs") or []:
+        name = entry.get("datasource")
+        if isinstance(name, str) and name:
+            expected[name] = dict(entry)
+    if expected:
+        return expected
+
+    # Legacy fallback: use role=datasource entries from report.inputs.
+    for entry in report.get("inputs") or []:
+        if entry.get("role") != "datasource":
+            continue
+        raw_name = entry.get("name")
+        if not isinstance(raw_name, str) or not raw_name:
+            continue
+        name = Path(raw_name).stem
+        expected[name] = {
+            "datasource": name,
+            "sha256": entry.get("sha256"),
+        }
+    return expected
 
 
 @contextmanager
@@ -116,6 +211,14 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument("script", help="Path to the script file")
     check_parser.add_argument("--out", required=True, help="Output directory for plan/report")
     check_parser.add_argument("--tables", default="", help="Comma-separated list of predeclared tables")
+    check_parser.add_argument(
+        "--inputs-dir",
+        "--inputs",
+        dest="inputs_dir",
+        default=None,
+        metavar="dir",
+        help="Directory of .csv files (non-recursive). Expands to predeclared table names by filename stem.",
+    )
     check_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     check_parser.add_argument("--no-strict", dest="strict", action="store_false")
     check_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
@@ -127,6 +230,14 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("script", help="Path to the script file")
     run_parser.add_argument("--out", required=True, help="Output directory for plan/report and outputs")
     run_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
+    run_parser.add_argument(
+        "--inputs-dir",
+        "--inputs",
+        dest="inputs_dir",
+        default=None,
+        metavar="dir",
+        help="Directory of .csv files (non-recursive). Expands to --tables <stem>=<path>.",
+    )
     run_parser.add_argument("--format", default="csv", choices=["csv", "xpt"], help="Output format (csv, xpt)")
     run_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     run_parser.add_argument("--no-strict", dest="strict", action="store_false")
@@ -168,6 +279,14 @@ def main(argv: list[str] | None = None) -> int:
     schema_lock_parser.add_argument("--write", "-o", dest="write", default=None, metavar="path", help="Lock output path (default: <script_dir>/<script_stem>.schema.lock.json); relative paths resolved against script dir")
     schema_lock_parser.add_argument("--out", default=None, metavar="dir", help="Optional: also write report.json and stage inputs under this directory")
     schema_lock_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
+    schema_lock_parser.add_argument(
+        "--inputs-dir",
+        "--inputs",
+        dest="inputs_dir",
+        default=None,
+        metavar="dir",
+        help="Directory of .csv files (non-recursive). Expands to --tables <stem>=<path>.",
+    )
     schema_lock_parser.add_argument("--include-root", action="append", default=[], help="Additional include root (repeatable)")
     schema_lock_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
     schema_lock_parser.add_argument("--allow-include-escape", action="store_true", default=False)
@@ -178,10 +297,27 @@ def main(argv: list[str] | None = None) -> int:
     validate_parser.add_argument("--profile", required=True, help="Validation profile (e.g., sdtm)")
     validate_parser.add_argument("--out", required=True, help="Output directory for validation report")
     validate_parser.add_argument("--tables", default="", help="Comma-separated table bindings name=path.csv")
+    validate_parser.add_argument(
+        "--inputs-dir",
+        "--inputs",
+        dest="inputs_dir",
+        default=None,
+        metavar="dir",
+        help="Directory of .csv files (non-recursive). Expands to --tables <stem>=<path>.",
+    )
 
     verify_parser = subparsers.add_parser("verify", help="Verify a repro bundle")
     verify_parser.add_argument("bundle", help="Path to report.json or bundle directory")
     verify_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json; verify its hash matches report.schema_lock_sha256")
+    verify_parser.add_argument("--tables", default="", help="Comma-separated datasource bindings name=path.csv for external input verification")
+    verify_parser.add_argument(
+        "--inputs-dir",
+        "--inputs",
+        dest="inputs_dir",
+        default=None,
+        metavar="dir",
+        help="Directory of .csv files (non-recursive). Expands to --tables <stem>=<path>.",
+    )
 
     fmt_parser = subparsers.add_parser("fmt", help="Format a .sans script")
     fmt_parser.add_argument("script", help="Path to the script file or directory")
@@ -195,6 +331,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "verify":
         from .hash_utils import compute_artifact_hash, compute_input_hash, compute_report_sha256
         from .path_utils import fs_path_from_report
+        try:
+            bindings = resolve_tables_from_flags(args, mode="bindings")
+        except TableFlagError as exc:
+            print(f"failed: {exc}")
+            return 1
         bundle_path = Path(args.bundle)
         if bundle_path.is_dir():
             report_path = bundle_path / "report.json"
@@ -268,6 +409,30 @@ def main(argv: list[str] | None = None) -> int:
         datasource_inputs = report.get("datasource_inputs") or []
         settings_datasources = report.get("settings") or {}
         settings_ds_list = settings_datasources.get("datasources") or []
+        if bindings:
+            expected_ds = _resolve_verify_datasource_expectations(report)
+            for name, path_str in sorted(bindings.items()):
+                if name not in expected_ds:
+                    # Ignore extra external files; only verify files that correspond to report datasources.
+                    continue
+                path = Path(path_str)
+                if not path.exists():
+                    print(f"failed: input table '{name}' file not found: {path}")
+                    return 1
+                expected = expected_ds[name]
+                expected_sha = expected.get("sha256")
+                if expected_sha:
+                    actual_sha = compute_input_hash(path)
+                    if actual_sha != expected_sha:
+                        print(f"failed: datasource hash mismatch for binding '{name}'")
+                        return 1
+                expected_size = expected.get("size_bytes")
+                if expected_size is not None:
+                    actual_size = path.stat().st_size
+                    if int(actual_size) != int(expected_size):
+                        print(f"failed: datasource size mismatch for binding '{name}'")
+                        return 1
+
         if is_thin:
             if not datasource_inputs:
                 print("failed: thin bundle must have datasource_inputs array")
@@ -375,7 +540,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         script_path = Path(args.script)
         out_dir = Path(args.out)
-        tables = _parse_tables(args.tables)
+        try:
+            tables = resolve_tables_from_flags(args, mode="names")
+        except TableFlagError as exc:
+            return _write_failed_report(out_dir, str(exc))
         include_roots = [Path(p) for p in args.include_root] if args.include_root else None
         try:
             text = script_path.read_text(encoding="utf-8")
@@ -407,18 +575,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         script_path = Path(args.script)
         out_dir = Path(args.out)
-        bindings = {}
-        if args.tables:
-            for item in args.tables.split(","):
-                if not item.strip():
-                    continue
-                if "=" not in item:
-                    return _write_failed_report(out_dir, f"Invalid table binding '{item}'")
-                name, path = item.split("=", 1)
-                name = name.strip()
-                if name in bindings:
-                    return _write_failed_report(out_dir, f"Duplicate table binding for '{name}'")
-                bindings[name] = path.strip()
+        try:
+            bindings = resolve_tables_from_flags(args, mode="bindings")
+        except TableFlagError as exc:
+            return _write_failed_report(out_dir, str(exc))
+        if bindings is None:
+            bindings = {}
         try:
             text = script_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -640,20 +802,13 @@ def main(argv: list[str] | None = None) -> int:
             write_path = (script_dir / write_arg).resolve() if not write_arg.is_absolute() else write_arg.resolve()
         else:
             write_path = (script_dir / f"{script_stem}.schema.lock.json").resolve()
-        bindings = {}
-        if args.tables:
-            for item in args.tables.split(","):
-                if not item.strip():
-                    continue
-                if "=" not in item:
-                    print(f"failed: Invalid table binding '{item}'")
-                    return 50
-                name, path = item.split("=", 1)
-                name = name.strip()
-                if name in bindings:
-                    print(f"failed: Duplicate table binding for '{name}'")
-                    return 50
-                bindings[name] = path.strip()
+        try:
+            bindings = resolve_tables_from_flags(args, mode="bindings")
+        except TableFlagError as exc:
+            print(f"failed: {exc}")
+            return 50
+        if bindings is None:
+            bindings = {}
         try:
             text = script_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -696,18 +851,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.profile.lower() != "sdtm":
             return _write_failed_validation_report(out_dir, f"Unsupported profile '{args.profile}'")
 
-        bindings = {}
-        if args.tables:
-            for item in args.tables.split(","):
-                if not item.strip():
-                    continue
-                if "=" not in item:
-                    return _write_failed_validation_report(out_dir, f"Invalid table binding '{item}'")
-                name, path = item.split("=", 1)
-                name = name.strip()
-                if name in bindings:
-                    return _write_failed_validation_report(out_dir, f"Duplicate table binding for '{name}'")
-                bindings[name] = path.strip()
+        try:
+            bindings = resolve_tables_from_flags(args, mode="bindings")
+        except TableFlagError as exc:
+            return _write_failed_validation_report(out_dir, str(exc))
+        if bindings is None:
+            bindings = {}
 
         report = validate_sdtm(bindings, out_dir)
         if report.get("status") == "failed":

@@ -257,7 +257,7 @@ no python eval. no “simple string to runtime.” expressions are ASTs.
   * `report.json` (diagnostics, stable error payloads)
 * exit codes reflect refusal category
 
-### `sans run <script> --inputs ... --out ...`
+### `sans run <script> --tables ... --out ...` or `--inputs-dir ...`
 
 * performs full pipeline
 * emits:
@@ -269,6 +269,8 @@ no python eval. no “simple string to runtime.” expressions are ASTs.
 flags worth having early:
 
 * `--strict/--no-strict` (default strict)
+* input binding: canonical `--tables name=path.csv,...`; convenience `--inputs-dir <dir>` (alias `--inputs`) expands deterministic filename-stem bindings from immediate `.csv` files
+* `--inputs-dir` contract: non-recursive, csv-only, symlinks rejected, case-insensitive stem collisions fail, and empty directories fail
 * `--allow-approx`
 * `--macros KEY=VAL` (or file) for trivial substitution
 * `--tolerance abs=...` for compare
