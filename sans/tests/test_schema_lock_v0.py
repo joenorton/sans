@@ -720,6 +720,45 @@ def test_schema_lock_with_out_dir(tmp_path: Path):
     assert (out_dir / "inputs" / "data" / "lb.csv").exists()
 
 
+# 25a) check with --schema-lock: untyped csv ref succeeds when lock supplies types
+def test_check_with_schema_lock_succeeds(tmp_path: Path):
+    import subprocess
+    import sys
+    (tmp_path / "lb.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+    lock_path = tmp_path / "demo.schema.lock.json"
+    lock_path.write_text(json.dumps({
+        "schema_lock_version": 1,
+        "created_by": {"sans_version": "0.1", "git_sha": ""},
+        "datasources": [{
+            "name": "lb",
+            "kind": "csv",
+            "path": "lb.csv",
+            "columns": [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}],
+            "rules": {"extra_columns": "ignore", "missing_columns": "error"},
+        }],
+    }, indent=2), encoding="utf-8")
+    script_path = tmp_path / "demo.sans"
+    script_path.write_text(
+        "# sans 0.1\n"
+        'datasource lb = csv("lb.csv")\n'
+        "table t = from(lb) select x, y\n"
+        'save t to "out.csv"\n',
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "out"
+    result = subprocess.run(
+        [sys.executable, "-m", "sans", "check", "demo.sans", "--out", str(out_dir), "--schema-lock", "demo.schema.lock.json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    assert report.get("status") == "ok"
+    assert report.get("schema_lock_used_path") == str(lock_path.resolve())
+    assert "lb" in (report.get("schema_lock_applied_datasources") or [])
+
+
 # 25b) schema-lock with --inputs / --inputs-dir: CSV resolved from given dir, not script dir
 def test_schema_lock_uses_inputs_dir(tmp_path: Path):
     import subprocess

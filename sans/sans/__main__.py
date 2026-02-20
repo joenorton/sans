@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .compiler import emit_check_artifacts
-from .runtime import run_script, RuntimeFailure
+from .runtime import run_script, RuntimeFailure, _resolve_schema_lock_path
 from .validator_sdtm import validate_sdtm
 from .fmt import FMT_STYLE_ID, format_text, normalize_newlines
 from . import __version__ as _engine_version
@@ -95,6 +95,22 @@ def resolve_tables_from_flags(args: argparse.Namespace, mode: str) -> set[str] |
         return _parse_table_bindings(tables_arg)
 
     raise ValueError(f"unknown table resolution mode: {mode}")
+
+
+def _load_schema_lock_for_check(lock_arg: str | None, script_path: Path) -> tuple[dict[str, Any] | None, Path | None]:
+    """Resolve and load schema lock when --schema-lock is set. Returns (lock_dict, resolved_path) or (None, None). Raises FileNotFoundError or ValueError on missing/invalid file."""
+    if not lock_arg:
+        return (None, None)
+    from .schema_lock import load_schema_lock
+
+    resolved = _resolve_schema_lock_path(Path(lock_arg), script_path, Path.cwd())
+    if not resolved.exists():
+        raise FileNotFoundError(f"schema lock file not found: {resolved}")
+    try:
+        lock = load_schema_lock(resolved)
+    except (ValueError, OSError) as e:
+        raise ValueError(f"schema lock invalid: {e}") from e
+    return (lock, resolved)
 
 
 def _resolve_verify_datasource_expectations(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -225,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument("--allow-absolute-include", action="store_true", default=False)
     check_parser.add_argument("--allow-include-escape", action="store_true", default=False)
     check_parser.add_argument("--legacy-sas", action="store_true", default=False, help="Enable legacy SAS expression operators for .sas")
+    check_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json to enforce when ingesting datasources")
 
     run_parser = subparsers.add_parser("run", help="Compile, validate, and execute a script")
     run_parser.add_argument("script", help="Path to the script file")
@@ -269,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     emit_ir_parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     emit_ir_parser.add_argument("--no-strict", dest="strict", action="store_false")
     emit_ir_parser.add_argument("--json", action="store_true", default=False, help="Print machine-readable result JSON")
+    emit_ir_parser.add_argument("--schema-lock", metavar="path", default=None, help="Path to schema.lock.json to enforce when ingesting datasources")
 
     ir_validate_parser = subparsers.add_parser("ir-validate", help="Validate sans.ir structure only")
     ir_validate_parser.add_argument("script", help="Path to the sans.ir file")
@@ -550,6 +568,14 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             return _write_failed_report(out_dir, str(exc))
 
+        try:
+            schema_lock, schema_lock_path_resolved = _load_schema_lock_for_check(
+                getattr(args, "schema_lock", None), script_path
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"failed: {exc}")
+            return 50
+
         irdoc, report = emit_check_artifacts(
             text=text,
             file_name=str(script_path),
@@ -560,6 +586,8 @@ def main(argv: list[str] | None = None) -> int:
             allow_absolute_includes=args.allow_absolute_include,
             allow_include_escape=args.allow_include_escape,
             legacy_sas=args.legacy_sas,
+            schema_lock=schema_lock,
+            schema_lock_path_resolved=schema_lock_path_resolved,
         )
 
         status = report.get("status")
@@ -711,6 +739,21 @@ def main(argv: list[str] | None = None) -> int:
         out_arg = Path(args.out)
         out_path = out_arg if out_arg.is_absolute() else (invoked_cwd / out_arg).resolve()
 
+        schema_lock = None
+        schema_lock_path_resolved = None
+        if getattr(args, "schema_lock", None):
+            try:
+                schema_lock, schema_lock_path_resolved = _load_schema_lock_for_check(
+                    args.schema_lock, script_path
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                msg = str(exc)
+                if args.json:
+                    print(json.dumps({"ok": False, "error": msg}, separators=(",", ":"), ensure_ascii=True))
+                else:
+                    print(f"failed: {msg}")
+                return 1
+
         with _temporary_cwd(compile_cwd):
             try:
                 text = script_path.read_text(encoding="utf-8")
@@ -732,6 +775,8 @@ def main(argv: list[str] | None = None) -> int:
                     allow_absolute_includes=False,
                     allow_include_escape=False,
                     legacy_sas=False,
+                    schema_lock=schema_lock,
+                    schema_lock_path_resolved=schema_lock_path_resolved,
                 )
 
             status = report.get("status")

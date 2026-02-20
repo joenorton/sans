@@ -139,3 +139,58 @@ def test_emit_ir_supports_cwd_and_json_output(tmp_path: Path):
 
     emitted = json.loads(out_path.read_text(encoding="utf-8"))
     assert emitted["datasources"]["dm"]["path"] == "dm.csv"
+
+
+def test_emit_ir_with_schema_lock_succeeds(tmp_path: Path):
+    """emit-ir with untyped csv ref succeeds when --schema-lock supplies types."""
+    script_path = tmp_path / "demo.sans"
+    script_path.write_text(
+        "# sans 0.1\n"
+        'datasource lb = csv("lb.csv")\n'
+        "table t = from(lb) select x, y\n"
+        'save t to "out.csv"\n',
+        encoding="utf-8",
+    )
+    lock_path = tmp_path / "demo.schema.lock.json"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "schema_lock_version": 1,
+                "created_by": {"sans_version": "0.1", "git_sha": ""},
+                "datasources": [
+                    {
+                        "name": "lb",
+                        "kind": "csv",
+                        "path": "lb.csv",
+                        "columns": [
+                            {"name": "x", "type": "int"},
+                            {"name": "y", "type": "int"},
+                        ],
+                        "rules": {"extra_columns": "ignore", "missing_columns": "error"},
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "out.sans.ir"
+
+    emit = _run_cmd(
+        [
+            sys.executable,
+            "-m",
+            "sans",
+            "emit-ir",
+            str(script_path),
+            "--out",
+            str(out_path),
+            "--schema-lock",
+            "demo.schema.lock.json",
+        ],
+        cwd=_project_root(),
+    )
+    assert emit.returncode == 0, emit.stdout + emit.stderr
+    assert out_path.exists()
+    emitted = json.loads(out_path.read_text(encoding="utf-8"))
+    assert "lb" in emitted.get("datasources", {})
