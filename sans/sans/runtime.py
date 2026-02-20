@@ -2117,12 +2117,18 @@ def generate_schema_lock_standalone(
         referenced = _referenced_csv_datasource_names(irdoc)
         untyped = [n for n in referenced if _is_untyped_referenced(irdoc, n, lock_map)]
 
+        def _resolve_csv_path(ds_name: str, ds: Any) -> Optional[Path]:
+            """Use bindings path when provided (--inputs/--inputs-dir), else script-relative."""
+            if bindings and ds_name in bindings:
+                return Path(bindings[ds_name]).expanduser().resolve()
+            return _resolve_datasource_path_for_inference(file_name, ds)
+
         script_dir = Path(file_name).resolve().parent
         for ds_name in untyped:
             ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
             if not ds or ds.kind != "csv":
                 continue
-            resolved = _resolve_datasource_path_for_inference(file_name, ds)
+            resolved = _resolve_csv_path(ds_name, ds)
             if not resolved or not resolved.exists():
                 raise RuntimeFailure(
                     "SANS_LOCK_GEN_FILE_NOT_FOUND",
@@ -2131,6 +2137,14 @@ def generate_schema_lock_standalone(
                 )
         from .schema_infer import DEFAULT_INFER_MAX_ROWS
         from .schema_lock import build_schema_lock, compute_lock_sha256, write_schema_lock
+        csv_path_overrides: Dict[str, Path] = {}
+        for ds_name in referenced:
+            ds = irdoc.datasources.get(ds_name) if irdoc.datasources else None
+            if not ds or ds.kind != "csv":
+                continue
+            p = _resolve_csv_path(ds_name, ds)
+            if p:
+                csv_path_overrides[ds_name] = p
         lock_dict = build_schema_lock(
             irdoc,
             referenced,
@@ -2139,6 +2153,7 @@ def generate_schema_lock_standalone(
             script_dir=script_dir,
             infer_untyped=bool(untyped),
             max_infer_rows=DEFAULT_INFER_MAX_ROWS,
+            csv_path_overrides=csv_path_overrides or None,
         )
         write_path_resolved = Path(write_path).resolve()
         write_schema_lock(lock_dict, write_path_resolved)
@@ -2176,7 +2191,7 @@ def generate_schema_lock_standalone(
                 if not ds or ds.kind not in ("csv", "inline_csv"):
                     continue
                 if ds.kind == "csv":
-                    src = _resolve_datasource_path_for_inference(file_name, ds)
+                    src = _resolve_csv_path(ds_name, ds)
                     if src and src.exists():
                         dest = data_dir / f"{ds_name}{src.suffix}"
                         shutil.copy2(src, dest)

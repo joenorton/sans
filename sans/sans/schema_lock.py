@@ -77,11 +77,13 @@ def build_schema_lock(
     script_dir: Optional[Path] = None,
     infer_untyped: bool = False,
     max_infer_rows: int = 10_000,
+    csv_path_overrides: Optional[Dict[str, Path]] = None,
 ) -> Dict[str, Any]:
     """
     Build schema lock payload for referenced CSV/inline_csv datasources.
     Types: from irdoc.column_types if present; else from schema_lock_used entry;
     else if infer_untyped, from infer_csv_schema. Path: from irdoc.datasources[name].path, normalized to /.
+    When infer_untyped and csv_path_overrides is set, CSV paths are taken from csv_path_overrides (e.g. from --inputs/--inputs-dir).
     """
     from .ir import OpStep
     from .schema_infer import (
@@ -121,7 +123,10 @@ def build_schema_lock(
             if infer_untyped:
                 if ds.kind == "csv":
                     raw_path = ds.path or f"{name}.csv"
-                    resolved = Path(raw_path) if Path(raw_path).is_absolute() else (script_dir or Path.cwd()) / raw_path
+                    if csv_path_overrides and name in csv_path_overrides:
+                        resolved = csv_path_overrides[name]
+                    else:
+                        resolved = Path(raw_path) if Path(raw_path).is_absolute() else (script_dir or Path.cwd()) / raw_path
                     inferred_columns, rows_scanned, truncated = infer_csv_schema(
                         path=resolved, content=None, max_rows=max_infer_rows
                     )

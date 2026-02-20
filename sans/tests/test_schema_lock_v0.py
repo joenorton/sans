@@ -720,6 +720,39 @@ def test_schema_lock_with_out_dir(tmp_path: Path):
     assert (out_dir / "inputs" / "data" / "lb.csv").exists()
 
 
+# 25b) schema-lock with --inputs / --inputs-dir: CSV resolved from given dir, not script dir
+def test_schema_lock_uses_inputs_dir(tmp_path: Path):
+    import subprocess
+    import sys
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    inputs_dir = tmp_path / "inputs"
+    inputs_dir.mkdir()
+    (inputs_dir / "lb.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+    script_path = repo / "edit_then_verify.sans"
+    script_path.write_text(
+        "# sans 0.1\n"
+        'datasource lb = csv("lb.csv")\n'
+        "table t = from(lb) select x, y\n"
+        'save t to "out.csv"\n',
+        encoding="utf-8",
+    )
+    lock_path = repo / "edit_then_verify.schema.lock.json"
+    result = subprocess.run(
+        [sys.executable, "-m", "sans", "schema-lock", "repo/edit_then_verify.sans", "--inputs", "inputs", "--write", "edit_then_verify.schema.lock.json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert lock_path.exists(), f"Lock not at {lock_path}; stderr: {result.stderr}"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert lock.get("schema_lock_version") == 1
+    assert len(lock["datasources"]) == 1
+    assert lock["datasources"][0]["name"] == "lb"
+    assert [c["name"] for c in lock["datasources"][0]["columns"]] == ["x", "y"]
+
+
 # 26) Run with relative --schema-lock from script dir: lock resolved against script dir, types applied (no E_TYPE_UNKNOWN)
 def test_run_with_relative_schema_lock_from_script_dir(tmp_path: Path):
     import subprocess
