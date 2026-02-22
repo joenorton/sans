@@ -1747,7 +1747,7 @@ def execute_plan(
                 elif op == "sort":
                     output_rows = _sort_rows(input_rows, step.params.get("by"), bool(step.params.get("nodupkey")))
                 elif op == "compute":
-                    assigns = step.params.get("assignments") or step.params.get("assign") or []
+                    assigns = step.params.get("assignments") or []
                     output_rows = []
                     for row in input_rows:
                         new_row = dict(row)

@@ -124,7 +124,7 @@ def _infer_schema_two_pass(
 
         if step.op == "compute":
             mode = step.params.get("mode") or "derive"
-            assignments = step.params.get("assignments") or step.params.get("assign") or []
+            assignments = step.params.get("assignments") or []
             if input_schema is None:
                 schema[output_table] = None
             else:
@@ -276,7 +276,7 @@ def build_var_graph(irdoc: IRDoc, initial_schema: Optional[Dict[str, List[str]]]
         input_schema = schema_map.get(input_table)
 
         if step.op == "compute":
-            assignments = step.params.get("assignments") or step.params.get("assign") or []
+            assignments = step.params.get("assignments") or []
             assigned_cols: List[str] = []
             for assign in assignments:
                 target = assign.get("target") or assign.get("col")

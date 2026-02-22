@@ -116,6 +116,7 @@ def test_decimal_arithmetic_rejects_float():
 
 
 def test_summary_default_naming_and_ordering():
+    """summary() lowers to aggregate with canonical group_by + metrics (no legacy vars/stats)."""
     script = """# sans 0.1
 datasource in = csv("in.csv")
 table stats = summary(from(in))
@@ -125,12 +126,14 @@ table out = stats select grp, x_mean, y_mean
 out
 """
     irdoc = compile_sans_script(script, "test.sans", tables={"in"})
-    # Check IR lowering
-    summary_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "aggregate")
-    assert summary_step.params["vars"] == ["x", "y"]
-    assert summary_step.params["stats"] == ["mean"]
-    
-    # Check that validation passed (no errors)
+    # Canonical aggregate: group_by and metrics only (IR_CANON_RULES; no vars/stats/class)
+    agg_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "aggregate")
+    assert agg_step.params["group_by"] == ["grp"]
+    # Lowering order: for each var then each stat -> x_mean, y_mean (vars then stats in inner loop)
+    metrics = agg_step.params["metrics"]
+    assert len(metrics) == 2
+    assert metrics[0] == {"name": "x_mean", "op": "mean", "col": "x"}
+    assert metrics[1] == {"name": "y_mean", "op": "mean", "col": "y"}
     assert not any(isinstance(s, UnknownBlockStep) and s.severity == "fatal" for s in irdoc.steps)
 
 def test_summary_unknown_column_error():
@@ -167,6 +170,7 @@ out
     assert not any(f"binding 'used'" in s.message for s in irdoc.steps if isinstance(s, UnknownBlockStep) and s.severity == "warning")
 
 def test_summary_with_explicit_stats():
+    """summary() with .stats(mean, sum) lowers to aggregate; canonical metrics only (no stats key)."""
     script = """# sans 0.1
 datasource in = csv("in.csv")
 table stats = summary(from(in))
@@ -178,8 +182,13 @@ out
 """
     irdoc = compile_sans_script(script, "test.sans", tables={"in"})
     assert not any(isinstance(s, UnknownBlockStep) and s.severity == "fatal" for s in irdoc.steps)
-    summary_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "aggregate")
-    assert summary_step.params["stats"] == ["mean", "sum"]
+    agg_step = next(s for s in irdoc.steps if isinstance(s, OpStep) and s.op == "aggregate")
+    assert agg_step.params["group_by"] == ["grp"]
+    # Ordering: for each var then each stat -> x_mean, x_sum
+    metrics = agg_step.params["metrics"]
+    assert len(metrics) == 2
+    assert metrics[0] == {"name": "x_mean", "op": "mean", "col": "x"}
+    assert metrics[1] == {"name": "x_sum", "op": "sum", "col": "x"}
 
 def test_demo_sans_semantic_acceptance():
     if not DEMO_SANS.exists():

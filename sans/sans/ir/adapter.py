@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from .._loc import Loc
 from ..types import parse_type_name
-from . import IRDoc, OpStep, DatasourceDecl, TableFact
+from . import IRDoc, OpStep, DatasourceDecl, TableFact, harden_irdoc
 from .schema import validate_sans_ir
 
 
@@ -45,9 +45,11 @@ def sans_ir_to_irdoc(doc: Dict[str, Any], file_name: str = "<sans.ir>") -> IRDoc
         for out in step.outputs:
             table_facts[out] = TableFact()
 
-    return IRDoc(
+    irdoc = IRDoc(
         steps=steps,
         tables=set(),
         table_facts=table_facts,
         datasources=datasources,
     )
+    harden_irdoc(irdoc)
+    return irdoc

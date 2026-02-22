@@ -25,6 +25,111 @@ from .ast import (
 )
 
 
+def _to_str_list(raw: Any) -> List[str]:
+    """Normalize to list[str] for cols/drop. Accept list or comma-separated string."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return []
+
+
+def _lower_select_params(keep: Any, drop: Any) -> Dict[str, Any]:
+    """Frontend-only: convert keep/drop to canonical cols or drop (list[str])."""
+    keep_list = _to_str_list(keep)
+    drop_list = _to_str_list(drop)
+    if keep_list:
+        return {"cols": keep_list}
+    if drop_list:
+        return {"drop": drop_list}
+    return {"cols": []}  # empty select; assert_canon may still refuse if required non-empty
+
+
+def _lower_sort_by(by: Any) -> List[Dict[str, Any]]:
+    """Frontend-only: convert by (list[str] or list[{col, asc?}]) to canonical list[{col, desc}]."""
+    if not by:
+        return []
+    if not isinstance(by, list):
+        return []
+    result: List[Dict[str, Any]] = []
+    for item in by:
+        if isinstance(item, str):
+            col = item.strip()
+            if col:
+                result.append({"col": col, "desc": False})
+        elif isinstance(item, dict):
+            col = item.get("col")
+            if col is not None:
+                col = str(col).strip()
+                if col:
+                    desc = item.get("desc", not item.get("asc", True))
+                    result.append({"col": col, "desc": bool(desc)})
+    return result
+
+
+def _lower_aggregate_params(
+    class_vars: Any,
+    var_vars: Any,
+    stats: Any,
+    naming: Any,
+    autoname: Any,
+) -> Dict[str, Any]:
+    """Frontend-only: convert class/var/stats to canonical group_by and metrics."""
+    from sans.ir import AGGREGATE_ALLOWED_OPS
+    group_list = _to_str_list(class_vars)
+    var_list = _to_str_list(var_vars)
+    stat_list = _to_str_list(stats) if stats else ["mean"]
+    if not stat_list:
+        stat_list = ["mean"]
+    for op in stat_list:
+        if op not in AGGREGATE_ALLOWED_OPS:
+            stat_list = ["mean"]
+            break
+    metrics: List[Dict[str, Any]] = []
+    for col in var_list:
+        for op in stat_list:
+            metrics.append({"name": f"{col}_{op}", "op": op, "col": col})
+    return {"group_by": group_list, "metrics": metrics}
+
+
+def _lower_compute_params(assign: Any, mode: str = "derive") -> Dict[str, Any]:
+    """Frontend-only: convert assign (list[{col, expr}]) to canonical assignments (list[{target, expr}])."""
+    if not assign:
+        return {"mode": mode, "assignments": []}
+    if not isinstance(assign, list):
+        return {"mode": mode, "assignments": []}
+    assignments = []
+    for a in assign:
+        if isinstance(a, dict):
+            target = a.get("target") or a.get("col")
+            expr = a.get("expr")
+            if target is not None:
+                assignments.append({"target": str(target), "expr": expr})
+    return {"mode": mode, "assignments": assignments}
+
+
+def _lower_rename_params(mappings: Any) -> Dict[str, Any]:
+    """Frontend-only: convert mappings (dict or list) to canonical mapping list[{from, to}]."""
+    if mappings is None:
+        return {"mapping": []}
+    if isinstance(mappings, dict):
+        return {"mapping": [{"from": k, "to": v} for k, v in sorted(mappings.items())]}
+    if isinstance(mappings, list):
+        result = []
+        for item in mappings:
+            if isinstance(item, dict):
+                fr = item.get("from") or item.get("old")
+                to = item.get("to") or item.get("new")
+                if fr is not None and to is not None:
+                    result.append({"from": str(fr).strip(), "to": str(to).strip()})
+            else:
+                result.append({"from": "", "to": ""})  # will fail later if invalid
+        return {"mapping": result}
+    return {"mapping": []}
+
+
 def _substitute_const_in_expr(expr: Any, const_bindings: Dict[str, Any]) -> Any:
     """Replace col nodes that reference a const name with lit nodes (compile-time substitution)."""
     if not isinstance(expr, dict):
@@ -215,26 +320,29 @@ class Lowerer:
         if isinstance(expr, BuilderExpr):
             curr_input = self._lower_table_expr(expr.source)
             if expr.kind == "sort":
+                by_canon = _lower_sort_by(expr.config.get("by", []))
                 self.steps.append(OpStep(
                     op="sort",
                     inputs=[curr_input],
                     outputs=[final_output],
-                    params={"by": expr.config.get("by", []), "nodupkey": expr.config.get("nodupkey", False)},
+                    params={"by": by_canon, "nodupkey": expr.config.get("nodupkey", False)},
                     loc=self._loc(expr.span)
                 ))
             elif expr.kind in ("summary", "aggregate"):
                 # summary() is legacy input sugar; always lower to canonical op "aggregate".
+                cfg = expr.config
+                params = _lower_aggregate_params(
+                    cfg.get("class", []),
+                    cfg.get("var", []) or cfg.get("vars", []),
+                    cfg.get("stats", ["mean"]),
+                    cfg.get("naming", "{var}_{stat}"),
+                    cfg.get("autoname", True),
+                )
                 self.steps.append(OpStep(
                     op="aggregate",
                     inputs=[curr_input],
                     outputs=[final_output],
-                    params={
-                        "class": expr.config.get("class", []),
-                        "vars": expr.config.get("var", []),
-                        "stats": expr.config.get("stats", ["mean"]),
-                        "naming": "{var}_{stat}",
-                        "autoname": True,
-                    },
+                    params=params,
                     loc=self._loc(expr.span),
                 ))
             return final_output
@@ -247,16 +355,20 @@ class Lowerer:
                 op="select",
                 inputs=[input_table],
                 outputs=[output_table],
-                params={"keep": transform.params.get("keep", []), "drop": transform.params.get("drop", [])},
+                params=_lower_select_params(
+                    transform.params.get("keep"),
+                    transform.params.get("drop"),
+                ),
                 loc=self._loc(transform.span)
             ))
             return output_table
         elif transform.kind == "drop":
+            drop_list = _to_str_list(transform.params.get("drop", []))
             self.steps.append(OpStep(
                 op="drop",
                 inputs=[input_table],
                 outputs=[output_table],
-                params={"cols": transform.params.get("drop", [])},
+                params={"cols": drop_list},
                 loc=self._loc(transform.span)
             ))
             return output_table
@@ -302,7 +414,7 @@ class Lowerer:
                 op="rename",
                 inputs=[input_table],
                 outputs=[output_table],
-                params={"mappings": transform.params["mappings"]},
+                params=_lower_rename_params(transform.params.get("mappings") or transform.params.get("mapping")),
                 loc=self._loc(transform.span)
             ))
             return output_table

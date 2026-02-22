@@ -353,6 +353,247 @@ def normalize_aggregate_params(params: Dict[str, Any], loc: Loc) -> None:
     params.pop("naming", None)
 
 
+# -----------------------------------------------------------------------------
+# Canonical-shape gate (refuse-only). See docs/IR_CANON_RULES.md.
+# -----------------------------------------------------------------------------
+# Forbidden legacy keys per op (hot zone only).
+_AGGREGATE_FORBIDDEN = frozenset({"class", "var", "vars", "stats", "autoname", "naming"})
+_SELECT_FORBIDDEN = frozenset({"keep"})
+_RENAME_FORBIDDEN = frozenset({"mappings", "map"})
+_SORT_FORBIDDEN = frozenset()  # asc is inside by[i], not top-level
+_DROP_FORBIDDEN = frozenset({"drop"})
+_COMPUTE_FORBIDDEN = frozenset({"assign"})
+
+
+def assert_canon_params(op: str, params: Dict[str, Any], loc: Loc) -> None:
+    """
+    Refuse-only: assert params are canonical for hot-zone ops.
+    Raises UnknownBlockStep with SANS_IR_CANON_* on forbidden key or wrong shape.
+    Does not mutate params.
+    """
+    if not isinstance(params, dict):
+        raise UnknownBlockStep(
+            code="SANS_IR_CANON_SHAPE_SELECT",
+            message="Params must be a dict.",
+            loc=loc,
+        )
+    p = params
+
+    if op == "select":
+        for k in _SELECT_FORBIDDEN:
+            if k in p:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_SELECT",
+                    message=f"Select must not have legacy key {k!r}; use cols or drop.",
+                    loc=loc,
+                )
+        cols = p.get("cols")
+        drop = p.get("drop")
+        has_cols = isinstance(cols, list) and len(cols) > 0
+        has_drop = isinstance(drop, list) and len(drop) > 0
+        if not has_cols and not has_drop:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_SELECT",
+                message="Select requires exactly one of cols or drop (non-empty list).",
+                loc=loc,
+            )
+        if has_cols and has_drop:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_SELECT",
+                message="Select cannot have both cols and drop.",
+                loc=loc,
+            )
+        if has_cols and not all(isinstance(c, str) for c in cols):
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_SELECT",
+                message="Select cols must be list of strings.",
+                loc=loc,
+            )
+        if has_drop and not all(isinstance(d, str) for d in drop):
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_SELECT",
+                message="Select drop must be list of strings.",
+                loc=loc,
+            )
+
+    elif op == "rename":
+        for k in _RENAME_FORBIDDEN:
+            if k in p:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_RENAME",
+                    message=f"Rename must not have legacy key {k!r}; use mapping.",
+                    loc=loc,
+                )
+        if isinstance(p.get("mapping"), dict):
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_RENAME",
+                message="Rename mapping must be list[{from, to}], not dict.",
+                loc=loc,
+            )
+        mapping = p.get("mapping")
+        if not isinstance(mapping, list) or len(mapping) == 0:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_RENAME",
+                message="Rename requires non-empty mapping list.",
+                loc=loc,
+            )
+        for i, entry in enumerate(mapping):
+            if not isinstance(entry, dict) or "from" not in entry or "to" not in entry:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_RENAME",
+                    message=f"Rename mapping[{i}] must be {{from, to}}.",
+                    loc=loc,
+                )
+            if not isinstance(entry.get("from"), str) or not isinstance(entry.get("to"), str):
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_RENAME",
+                    message="Rename mapping from/to must be strings.",
+                    loc=loc,
+                )
+
+    elif op == "sort":
+        by = p.get("by")
+        if not isinstance(by, list) or len(by) == 0:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_SORT",
+                message="Sort requires non-empty by list[{col, desc}].",
+                loc=loc,
+            )
+        for i, entry in enumerate(by):
+            if isinstance(entry, str):
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_SORT",
+                    message="Sort by must be list[{col, desc}], not list of strings.",
+                    loc=loc,
+                )
+            if not isinstance(entry, dict) or "col" not in entry or "desc" not in entry:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_SORT",
+                    message=f"Sort by[{i}] must have col and desc (bool).",
+                    loc=loc,
+                )
+            if "asc" in entry:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_SORT",
+                    message="Sort by must use desc (bool), not asc.",
+                    loc=loc,
+                )
+
+    elif op == "aggregate":
+        for k in _AGGREGATE_FORBIDDEN:
+            if k in p:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_AGGREGATE",
+                    message=f"Aggregate must not have legacy key {k!r}; use group_by and metrics.",
+                    loc=loc,
+                )
+        group_by = p.get("group_by")
+        metrics = p.get("metrics")
+        if group_by is not None and not isinstance(group_by, list):
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_AGGREGATE",
+                message="Aggregate group_by must be a list.",
+                loc=loc,
+            )
+        if not isinstance(metrics, list) or len(metrics) == 0:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_AGGREGATE",
+                message="Aggregate requires non-empty metrics list[{name, op, col}].",
+                loc=loc,
+            )
+        for i, m in enumerate(metrics):
+            if not isinstance(m, dict) or m.get("op") not in AGGREGATE_ALLOWED_OPS:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_AGGREGATE",
+                    message=f"Aggregate metrics[{i}] must have op in {sorted(AGGREGATE_ALLOWED_OPS)}.",
+                    loc=loc,
+                )
+            if not all(k in m for k in ("name", "op", "col")):
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_AGGREGATE",
+                    message="Aggregate metric must have name, op, col.",
+                    loc=loc,
+                )
+
+    elif op == "cast":
+        casts = p.get("casts")
+        if not isinstance(casts, list) or len(casts) == 0:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_CAST",
+                message="Cast requires non-empty casts list.",
+                loc=loc,
+            )
+        for i, c in enumerate(casts):
+            if not isinstance(c, dict) or "col" not in c or "to" not in c:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_CAST",
+                    message=f"Cast casts[{i}] must have col and to.",
+                    loc=loc,
+                )
+            if c.get("to") not in CAST_ALLOWED_TYPES:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_CAST",
+                    message=f"Cast to must be in {sorted(CAST_ALLOWED_TYPES)}.",
+                    loc=loc,
+                )
+
+    elif op == "drop":
+        for k in _DROP_FORBIDDEN:
+            if k in p:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_DROP",
+                    message=f"Drop must not have legacy key {k!r}; use cols.",
+                    loc=loc,
+                )
+        cols = p.get("cols")
+        if not isinstance(cols, list) or len(cols) == 0:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_DROP",
+                message="Drop requires non-empty cols list.",
+                loc=loc,
+            )
+        if not all(isinstance(c, str) for c in cols):
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_DROP",
+                message="Drop cols must be list of strings.",
+                loc=loc,
+            )
+
+    elif op == "compute":
+        for k in _COMPUTE_FORBIDDEN:
+            if k in p:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_COMPUTE",
+                    message=f"Compute must not have legacy key {k!r}; use assignments.",
+                    loc=loc,
+                )
+        assignments = p.get("assignments")
+        if not isinstance(assignments, list) or len(assignments) == 0:
+            raise UnknownBlockStep(
+                code="SANS_IR_CANON_SHAPE_COMPUTE",
+                message="Compute requires non-empty assignments list.",
+                loc=loc,
+            )
+        for i, a in enumerate(assignments):
+            if not isinstance(a, dict) or "target" not in a or "expr" not in a:
+                raise UnknownBlockStep(
+                    code="SANS_IR_CANON_SHAPE_COMPUTE",
+                    message=f"Compute assignments[{i}] must have target and expr.",
+                    loc=loc,
+                )
+
+
+def harden_irdoc(irdoc: "IRDoc") -> None:
+    """
+    Canonical-shape gate (refuse-only). Run at every IRDoc ingress.
+    For each OpStep, asserts canonical params; raises UnknownBlockStep with SANS_IR_CANON_* on violation.
+    Does not mutate irdoc or step.params.
+    """
+    for step in irdoc.steps:
+        if isinstance(step, OpStep):
+            assert_canon_params(step.op, step.params or {}, step.loc)
+
+
 @dataclass(frozen=True)
 class DatasourceDecl:
     kind: str                 # "csv" | "inline_csv"
@@ -463,43 +704,8 @@ class IRDoc:
                         loc=step.loc,
                     )
 
-                # Normalize params to canonical shapes (single choke point)
-                if step.op == "select":
-                    keep_raw = step.params.get("keep")
-                    drop_raw = step.params.get("drop")
-                    if keep_raw is not None and keep_raw:
-                        step.params["cols"] = normalize_select_cols(keep_raw, step.loc)
-                        step.params.pop("keep", None)
-                        step.params.pop("drop", None)
-                    elif drop_raw is not None and drop_raw:
-                        step.params["drop"] = normalize_select_cols(drop_raw, step.loc)
-                        step.params.pop("keep", None)
-                        step.params.pop("cols", None)
-                    elif not step.params.get("cols") and not step.params.get("drop"):
-                        raise UnknownBlockStep(
-                            code="SANS_VALIDATE_SELECT_MISSING_COLS",
-                            message="Select operation requires non-empty keep or drop column list.",
-                            loc=step.loc,
-                        )
-                elif step.op == "rename":
-                    raw = step.params.get("mappings") or step.params.get("map") or step.params.get("mapping")
-                    step.params["mapping"] = normalize_rename_mapping(raw, step.loc)
-                    step.params.pop("mappings", None)
-                    step.params.pop("map", None)
-                elif step.op == "aggregate":
-                    normalize_aggregate_params(step.params, step.loc)
-                elif step.op == "cast":
-                    normalize_cast_params(step.params, step.loc)
-                elif step.op == "drop":
-                    raw = step.params.get("cols") or step.params.get("drop")
-                    step.params["cols"] = normalize_select_cols(raw, step.loc)
-                    step.params.pop("drop", None)
-                    if not step.params["cols"]:
-                        raise UnknownBlockStep(
-                            code="SANS_VALIDATE_DROP_EMPTY",
-                            message="Drop operation requires non-empty column list.",
-                            loc=step.loc,
-                        )
+                # Assert canonical param shape (read-only; no mutation). See docs/IR_CANON_RULES.md.
+                assert_canon_params(step.op, step.params or {}, step.loc)
 
                 # Determine sortedness for output tables based on the operation.
                 # Choose the first *real table* input as the sortedness reference.
@@ -514,9 +720,8 @@ class IRDoc:
                 output_sorted_by: Optional[List[str]] = None  # Default to unsorted
 
                 if step.op == "sort":
-                    # Single choke point: normalize to canonical list[{"col": str, "desc": bool}]
-                    step.params["by"] = normalize_sort_by(step.params.get("by"), step.loc)
-                    by_vars = step.params["by"]
+                    # Params already canonical (assert_canon_params above); read-only.
+                    by_vars = step.params.get("by") or []
                     output_sorted_by = [v["col"] for v in by_vars]
 
                 elif step.op == "data_step":
@@ -662,6 +867,8 @@ __all__ = [
     "Step",
     "TableFact",
     "UnknownBlockStep",
+    "assert_canon_params",
+    "harden_irdoc",
     "ds_input",
     "is_ds_input",
     "ds_name_from_input",

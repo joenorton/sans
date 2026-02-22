@@ -1,6 +1,6 @@
 [project]
 name = "sans"
-version = "0.2.1"
+version = "0.3.0"
 description = "A small, deterministic batch execution engine for tabular transformation scripts."
 requires-python = ">=3.9"
 readme = "README.md"

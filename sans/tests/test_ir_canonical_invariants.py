@@ -174,7 +174,7 @@ def _assert_per_op_canonical_shapes(irdoc: IRDoc) -> None:
 
         elif op == "compute":
             mode = params.get("mode")
-            assigns = params.get("assignments") or params.get("assign")
+            assigns = params.get("assignments")
             if mode is not None:
                 assert mode in ("derive", "update"), f"Step {i} compute: mode must be derive or update"
             assert assigns is not None and isinstance(assigns, list), (

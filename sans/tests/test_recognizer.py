@@ -95,6 +95,7 @@ def test_recognize_data_block_malformed_set_statement():
     assert step.loc == Loc("test.sas", 2, 2)
 
 def test_recognize_proc_sort_block_happy_path():
+    """SAS 'by var1 var2;' lowers to canonical sort params: by=[{col, desc}], no legacy asc."""
     script = "proc sort data=input_table out=output_table;\nby var1 var2;\nrun;"
     block = create_proc_block(script)
 
@@ -104,7 +105,8 @@ def test_recognize_proc_sort_block_happy_path():
     assert step.op == "sort"
     assert step.inputs == ["input_table"]
     assert step.outputs == ["output_table"]
-    assert step.params == {"by": [{"col": "var1", "asc": True}, {"col": "var2", "asc": True}]}
+    # Canonical shape (IR_CANON_RULES): by = list[{col, desc}]; asc is forbidden in nucleus
+    assert step.params == {"by": [{"col": "var1", "desc": False}, {"col": "var2", "desc": False}]}
     assert step.loc == Loc("test.sas", 1, 3)
 
 def test_recognize_proc_sort_block_missing_by():

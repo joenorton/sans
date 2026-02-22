@@ -107,14 +107,13 @@ class TestDataStepCompiler:
         assert compute_step.outputs == ["out_table"]
         
         expected_assignments = [
-            {"col": "x", "expr": binop("+", col("a"), col("b"))},
-            {"col": "y", "expr": binop("*", lit(10), col("c"))},
+            {"target": "x", "expr": binop("+", col("a"), col("b"))},
+            {"target": "y", "expr": binop("*", lit(10), col("c"))},
         ]
-        # Compare assign params without relying on exact dict equality for complex objects
-        assert len(compute_step.params["assign"]) == len(expected_assignments)
-        for i, assignment in enumerate(compute_step.params["assign"]):
-            assert assignment["col"] == expected_assignments[i]["col"]
-            # Deep comparison of expression nodes
+        # Canonical: assignments (not assign)
+        assert len(compute_step.params["assignments"]) == len(expected_assignments)
+        for i, assignment in enumerate(compute_step.params["assignments"]):
+            assert assignment["target"] == expected_assignments[i]["target"]
             assert assignment["expr"] == expected_assignments[i]["expr"]
         
         # Loc should span the entire data step block
@@ -203,8 +202,8 @@ class TestDataStepCompiler:
         assert compute_step.op == "compute"
         assert compute_step.inputs == [temp1]
         assert compute_step.outputs[0].startswith("final_out__") # temp output
-        assert compute_step.params["assign"][0]["col"] == "new_col"
-        assert compute_step.params["assign"][0]["expr"] == binop("+", col("colX"), lit(5))
+        assert compute_step.params["assignments"][0]["target"] == "new_col"
+        assert compute_step.params["assignments"][0]["expr"] == binop("+", col("colX"), lit(5))
         assert compute_step.loc == L("test.sas", 2, 8)
         temp2 = compute_step.outputs[0]
 
@@ -265,7 +264,7 @@ class TestDataStepCompiler:
         irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         compute_step = irdoc.steps[0]
         expected_expr = binop("+", col("a"), binop("*", col("b"), lit(2)))
-        assert compute_step.params["assign"][0]["expr"] == expected_expr
+        assert compute_step.params["assignments"][0]["expr"] == expected_expr
 
     def test_expression_precedence_logical_and_or(self):
         script = textwrap.dedent("""
@@ -302,7 +301,7 @@ class TestDataStepCompiler:
         irdoc = check_script(script, "test.sas", tables={"in"}, legacy_sas=True)
         compute_step = irdoc.steps[0]
         expected_expr = binop("*", binop("+", col("a"), col("b")), col("c"))
-        assert compute_step.params["assign"][0]["expr"] == expected_expr
+        assert compute_step.params["assignments"][0]["expr"] == expected_expr
 
     def test_expression_functions(self):
         script = textwrap.dedent("""
@@ -316,16 +315,16 @@ class TestDataStepCompiler:
         compute_step = irdoc.steps[0]
         
         expected_assigns = [
-            {"col": "x", "expr": call("coalesce", [col("a"), col("b")])},
-            {"col": "y", "expr": call("if", [
+            {"target": "x", "expr": call("coalesce", [col("a"), col("b")])},
+            {"target": "y", "expr": call("if", [
                 binop(">", col("z"), lit(0)),
                 lit(1),
                 lit(0),
             ])},
         ]
-        assert len(compute_step.params["assign"]) == len(expected_assigns)
-        for i, assignment in enumerate(compute_step.params["assign"]):
-            assert assignment["col"] == expected_assigns[i]["col"]
+        assert len(compute_step.params["assignments"]) == len(expected_assigns)
+        for i, assignment in enumerate(compute_step.params["assignments"]):
+            assert assignment["target"] == expected_assigns[i]["target"]
             assert assignment["expr"] == expected_assigns[i]["expr"]
     
     # --- Malformed Statements ---
@@ -575,8 +574,8 @@ class TestSortednessFacts:
         )
         with pytest.raises(UnknownBlockStep) as exc_info:
             irdoc.validate()
-        assert exc_info.value.code == "SANS_VALIDATE_SORT_MISSING_BY"
-        assert "PROC SORT operation requires 'by' variables." in exc_info.value.message
+        assert exc_info.value.code == "SANS_IR_CANON_SHAPE_SORT"
+        assert "by" in exc_info.value.message.lower()
         assert exc_info.value.loc == L("test.sas", 2, 3)
 
     def test_data_step_requires_sorted_input_for_by(self):

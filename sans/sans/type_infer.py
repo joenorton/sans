@@ -344,19 +344,6 @@ def infer_table_schema_types(irdoc: Any) -> Dict[str, Dict[str, Type]]:
                             raise TypeInferenceError(err.message, code=err.code, loc=step.loc)
                         out_schema[target] = t
                         env[target] = t
-                assign_legacy = step.params.get("assign")
-                if isinstance(assign_legacy, list):
-                    for assign in assign_legacy:
-                        target = assign.get("col")
-                        expr = assign.get("expr")
-                        if not target or expr is None:
-                            continue
-                        try:
-                            t = infer_expr_type(expr, env)
-                        except TypeInferenceError as err:
-                            raise TypeInferenceError(err.message, code=err.code, loc=step.loc)
-                        out_schema[target] = t
-                        env[target] = t
             else:
                 out_schema = None
             for out in outputs:

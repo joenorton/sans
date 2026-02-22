@@ -112,12 +112,13 @@ def test_expanded_sans_never_emits_summary():
     assert "summary" not in expanded, "expanded.sans must not contain 'summary'; use 'aggregate'"
 
 
-def test_sort_by_normalized_to_canonical_in_validation():
-    """Feeding legacy shapes (list[str] or list[dict] with asc) into validate() yields canonical by=[{"col", "desc"} only."""
+def test_sort_by_legacy_refused_in_validation():
+    """Legacy shapes (list[str] or asc) are refused in validate(); canonical by=[{"col", "desc"}] passes."""
+    import pytest
     from sans._loc import Loc
-    from sans.ir import DatasourceDecl, TableFact
+    from sans.ir import DatasourceDecl, TableFact, UnknownBlockStep
 
-    # Legacy list[str] -> canonical [{"col": s, "desc": False}, ...]
+    # Legacy list[str] is refused (no normalization in nucleus)
     step_legacy_str = OpStep(
         op="sort",
         inputs=["__datasource__raw"],
@@ -131,10 +132,11 @@ def test_sort_by_normalized_to_canonical_in_validation():
         table_facts={},
         datasources={"raw": DatasourceDecl(kind="csv", path="x")},
     )
-    irdoc_str.validate()
-    assert step_legacy_str.params["by"] == [{"col": "a", "desc": False}, {"col": "b", "desc": False}]
+    with pytest.raises(UnknownBlockStep) as exc_info:
+        irdoc_str.validate()
+    assert exc_info.value.code == "SANS_IR_CANON_SHAPE_SORT"
 
-    # list[dict] with "asc" -> canonical {"col", "desc"} (no "asc" in output)
+    # list[dict] with "asc" is refused (canonical is desc only)
     step_legacy_asc = OpStep(
         op="sort",
         inputs=["t0"],
@@ -143,8 +145,21 @@ def test_sort_by_normalized_to_canonical_in_validation():
         loc=Loc("test.sas", 1, 1),
     )
     irdoc_asc = IRDoc(steps=[step_legacy_asc], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
-    irdoc_asc.validate()
-    assert step_legacy_asc.params["by"] == [{"col": "x", "desc": False}, {"col": "y", "desc": True}]
+    with pytest.raises(UnknownBlockStep) as exc_info2:
+        irdoc_asc.validate()
+    assert exc_info2.value.code == "SANS_IR_CANON_SHAPE_SORT"
+
+    # Canonical by passes and is not mutated
+    step_canon = OpStep(
+        op="sort",
+        inputs=["t0"],
+        outputs=["s3"],
+        params={"by": [{"col": "x", "desc": False}, {"col": "y", "desc": True}]},
+        loc=Loc("test.sas", 1, 1),
+    )
+    irdoc_canon = IRDoc(steps=[step_canon], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
+    irdoc_canon.validate()
+    assert step_canon.params["by"] == [{"col": "x", "desc": False}, {"col": "y", "desc": True}]
 
 
 def test_expanded_sans_sort_by_dict_keys_deterministic():
@@ -181,12 +196,13 @@ def test_expanded_sans_sort_by_dict_keys_deterministic():
     assert "by(-x, y)" in expanded2
 
 
-def test_select_rename_aggregate_normalized_to_canonical_in_validation():
-    """Legacy shapes for select, rename, aggregate normalize to canonical in validate()."""
+def test_select_rename_aggregate_legacy_refused_in_validation():
+    """Legacy shapes for select, rename, aggregate are refused in validate(); canonical passes."""
+    import pytest
     from sans._loc import Loc
-    from sans.ir import DatasourceDecl, TableFact
+    from sans.ir import DatasourceDecl, TableFact, UnknownBlockStep
 
-    # Select: legacy keep -> cols; legacy drop -> drop
+    # Select with legacy "keep" is refused
     step_keep = OpStep(
         op="select",
         inputs=["t0"],
@@ -194,26 +210,17 @@ def test_select_rename_aggregate_normalized_to_canonical_in_validation():
         params={"keep": ["a", "b"]},
         loc=Loc("test.sas", 1, 1),
     )
-    step_drop = OpStep(
-        op="select",
-        inputs=["t0"],
-        outputs=["s2"],
-        params={"drop": ["x"]},
-        loc=Loc("test.sas", 1, 1),
-    )
     irdoc = IRDoc(
-        steps=[step_keep, step_drop],
+        steps=[step_keep],
         tables={"t0"},
         table_facts={"t0": TableFact()},
         datasources={},
     )
-    irdoc.validate()
-    assert step_keep.params.get("cols") == ["a", "b"]
-    assert "keep" not in step_keep.params
-    assert step_drop.params.get("drop") == ["x"]
-    assert "cols" not in step_drop.params
+    with pytest.raises(UnknownBlockStep) as exc_info:
+        irdoc.validate()
+    assert exc_info.value.code == "SANS_IR_CANON_SHAPE_SELECT"
 
-    # Rename: legacy dict -> mapping list (sorted by "from")
+    # Rename with legacy "map" (dict) is refused
     step_rename = OpStep(
         op="rename",
         inputs=["t0"],
@@ -222,11 +229,11 @@ def test_select_rename_aggregate_normalized_to_canonical_in_validation():
         loc=Loc("test.sas", 1, 1),
     )
     irdoc2 = IRDoc(steps=[step_rename], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
-    irdoc2.validate()
-    assert step_rename.params["mapping"] == [{"from": "a", "to": "A"}, {"from": "b", "to": "B"}]
-    assert "map" not in step_rename.params
+    with pytest.raises(UnknownBlockStep) as exc_info2:
+        irdoc2.validate()
+    assert exc_info2.value.code == "SANS_IR_CANON_SHAPE_RENAME"
 
-    # Aggregate: legacy class/var/stats -> group_by + metrics
+    # Aggregate with legacy class/var/stats is refused
     step_agg = OpStep(
         op="aggregate",
         inputs=["t0"],
@@ -235,12 +242,21 @@ def test_select_rename_aggregate_normalized_to_canonical_in_validation():
         loc=Loc("test.sas", 1, 1),
     )
     irdoc3 = IRDoc(steps=[step_agg], tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
-    irdoc3.validate()
-    assert step_agg.params["group_by"] == ["g"]
-    assert step_agg.params["metrics"] == [{"name": "x_mean", "op": "mean", "col": "x"}]
-    assert "class" not in step_agg.params
-    assert "var" not in step_agg.params
-    assert "stats" not in step_agg.params
+    with pytest.raises(UnknownBlockStep) as exc_info3:
+        irdoc3.validate()
+    assert exc_info3.value.code == "SANS_IR_CANON_SHAPE_AGGREGATE"
+
+    # Canonical select/rename/aggregate pass validate() without mutation
+    steps_canon = [
+        OpStep(op="select", inputs=["t0"], outputs=["s1"], params={"cols": ["a", "b"]}, loc=Loc("test.sas", 1, 1)),
+        OpStep(op="rename", inputs=["t0"], outputs=["s2"], params={"mapping": [{"from": "a", "to": "A"}]}, loc=Loc("test.sas", 1, 1)),
+        OpStep(op="aggregate", inputs=["t0"], outputs=["s3"], params={"group_by": ["g"], "metrics": [{"name": "x_mean", "op": "mean", "col": "x"}]}, loc=Loc("test.sas", 1, 1)),
+    ]
+    irdoc_canon = IRDoc(steps=steps_canon, tables={"t0"}, table_facts={"t0": TableFact()}, datasources={})
+    irdoc_canon.validate()
+    assert steps_canon[0].params == {"cols": ["a", "b"]}
+    assert steps_canon[1].params == {"mapping": [{"from": "a", "to": "A"}]}
+    assert steps_canon[2].params["group_by"] == ["g"] and len(steps_canon[2].params["metrics"]) == 1
 
 
 def test_expanded_sans_select_rename_aggregate_canonical_output():

@@ -5,6 +5,13 @@ from typing import Optional, Any, List, Dict, Tuple
 from .frontend import Block, Statement
 from .ir import OpStep, UnknownBlockStep, Step
 from ._loc import Loc
+from .sans_script.lower import (
+    _lower_select_params,
+    _lower_rename_params,
+    _lower_sort_by,
+    _lower_aggregate_params,
+    _lower_compute_params,
+)
 from .parser_expr import parse_expression_from_string
 from .legacy import LegacyExprError, parse_legacy_predicate
 from .expr import lit
@@ -532,7 +539,7 @@ def recognize_data_block(block: Block, legacy_sas: bool = False) -> list[OpStep 
             op="select",
             inputs=[pipeline_input_table],
             outputs=[pipeline_output_table],
-            params={"keep": set_spec.get("keep") or [], "drop": set_spec.get("drop") or []},
+            params=_lower_select_params(set_spec.get("keep"), set_spec.get("drop")),
             loc=set_stmt.loc,
         ))
         pipeline_input_table = pipeline_output_table
@@ -543,7 +550,7 @@ def recognize_data_block(block: Block, legacy_sas: bool = False) -> list[OpStep 
             op="rename",
             inputs=[pipeline_input_table],
             outputs=[pipeline_output_table],
-            params={"map": set_spec["rename"]},
+            params=_lower_rename_params(set_spec["rename"]),
             loc=set_stmt.loc,
         ))
         pipeline_input_table = pipeline_output_table
@@ -600,7 +607,7 @@ def recognize_data_block(block: Block, legacy_sas: bool = False) -> list[OpStep 
             op="rename",
             inputs=[pipeline_input_table],
             outputs=[pipeline_output_table],
-            params={"map": rename_map},
+            params=_lower_rename_params(rename_map),
             loc=block.loc_span,
         ))
         pipeline_input_table = pipeline_output_table
@@ -634,7 +641,7 @@ def recognize_data_block(block: Block, legacy_sas: bool = False) -> list[OpStep 
             op="compute",
             inputs=[pipeline_input_table],
             outputs=[pipeline_output_table],
-            params={"assign": assignments},
+            params=_lower_compute_params(assignments),
             loc=block.loc_span,
         ))
         pipeline_input_table = pipeline_output_table
@@ -688,7 +695,7 @@ def recognize_data_block(block: Block, legacy_sas: bool = False) -> list[OpStep 
             op="select",
             inputs=[pipeline_input_table],
             outputs=[final_output_table],
-            params=select_params,
+            params=_lower_select_params(select_params.get("keep"), select_params.get("drop")),
             loc=block.loc_span,
         ))
     elif steps:
@@ -1226,7 +1233,8 @@ def recognize_proc_sort_block(block: Block) -> OpStep | UnknownBlockStep:
             loc=block.loc_span,
         )
 
-    params: dict[str, Any] = {"by": [{"col": v, "asc": True} for v in by_vars]}
+    by_canon = _lower_sort_by([{"col": v, "asc": True} for v in by_vars])
+    params: dict[str, Any] = {"by": by_canon}
     if nodupkey:
         params["nodupkey"] = True
 
@@ -1795,10 +1803,13 @@ def recognize_proc_summary_block(block: Block) -> OpStep | UnknownBlockStep:
             loc=block.loc_span,
         )
 
+    params = _lower_aggregate_params(
+        class_vars, var_vars, ["mean"], "{var}_{stat}", True
+    )
     return OpStep(
         op="aggregate",
         inputs=[input_table],
         outputs=[output_table],
-        params={"class": class_vars, "vars": var_vars, "stats": ["mean"], "autoname": True},
+        params=params,
         loc=block.loc_span,
     )

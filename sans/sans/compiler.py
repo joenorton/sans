@@ -18,7 +18,7 @@ from .recognizer import (
     recognize_proc_format_block,
     recognize_proc_summary_block,
 )
-from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact
+from .ir import IRDoc, Step, UnknownBlockStep, OpStep, TableFact, harden_irdoc
 from .sans_script.ast import DatasourceDeclaration # New import
 from . import __version__ as _engine_version
 from .types import type_name, Type
@@ -145,7 +145,7 @@ def compile_script(
             for table_name, facts_dict in initial_table_facts.items():
                 tf_objects[table_name] = TableFact(**facts_dict)
         table_set = set(tables) if tables else set()
-        return IRDoc(
+        irdoc = IRDoc(
             steps=[
                 UnknownBlockStep(
                     code=refusal.code,
@@ -156,6 +156,8 @@ def compile_script(
             tables=table_set,
             table_facts=tf_objects,
         )
+        harden_irdoc(irdoc)
+        return irdoc
 
     # 1. Macro Preprocessing
     try:
@@ -169,13 +171,15 @@ def compile_script(
     except MacroError as e:
         err_file = e.file or file_name
         err_line = e.line or 1
-        return IRDoc(steps=[
+        irdoc = IRDoc(steps=[
             UnknownBlockStep(
                 code="SANS_PARSE_MACRO_ERROR",
                 message=str(e),
                 loc=Loc(err_file, err_line, err_line),
             )
         ])
+        harden_irdoc(irdoc)
+        return irdoc
 
     # 2. split_statements()
     statements = list(split_statements(text, file_name))
@@ -250,8 +254,11 @@ def compile_script(
 
     # Initialize IRDoc with steps, pre-declared tables, and initial table facts
     if tables is None:
-        return IRDoc(steps=ir_steps, table_facts=tf_objects)
-    return IRDoc(steps=ir_steps, tables=tables, table_facts=tf_objects)
+        irdoc = IRDoc(steps=ir_steps, table_facts=tf_objects)
+    else:
+        irdoc = IRDoc(steps=ir_steps, tables=tables, table_facts=tf_objects)
+    harden_irdoc(irdoc)
+    return irdoc
 
 
 def compile_sans_script(
@@ -289,7 +296,7 @@ def compile_sans_script(
         if initial_table_facts:
             for table_name, facts_dict in initial_table_facts.items():
                 tf_objects[table_name] = TableFact(**facts_dict)
-        return IRDoc(
+        irdoc = IRDoc(
             steps=[
                 UnknownBlockStep(
                     code=err.code,
@@ -300,6 +307,8 @@ def compile_sans_script(
             tables=table_set,
             table_facts=tf_objects,
         )
+        harden_irdoc(irdoc)
+        return irdoc
 
     tf_objects: Dict[str, TableFact] = {}
     if initial_table_facts:
@@ -332,12 +341,14 @@ def compile_sans_script(
 
         ir_datasources[ast_ds.name] = ir_ds
 
-    return IRDoc(
+    irdoc = IRDoc(
         steps=steps,
         tables=table_set,
         table_facts=tf_objects,
         datasources=ir_datasources,
     )
+    harden_irdoc(irdoc)
+    return irdoc
 
 def check_script(
     text: str,

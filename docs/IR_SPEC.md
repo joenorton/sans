@@ -8,6 +8,7 @@ Core semantics
 - `steps[]` is an ordered plan; no hidden state or implicit tables.
 - `inputs[]` and `outputs[]` are explicit; each op must declare its outputs.
 - Tables only exist if produced by a prior step or predeclared by the caller.
+- Canonical IR is the single representation for execution and auditing. SAS and other frontends may lower to canonical ops; cheshbon-complete and determinism guarantees apply only once the plan is in canonical IR. Legacy param shapes are not accepted in the nucleus; see IR_CANON_RULES.md.
 
 Unknown blocks
 - Represented as `UnknownBlockStep` with `kind="block"`.
@@ -43,6 +44,7 @@ Data step op (stateful subset)
   - Statements execute in order.
   - BY groups compute `first.<key>` / `last.<key>` flags.
   - `merge` sets `in=` flags per input dataset.
+- Params and statement shapes are part of the canonical data_step op; frontends (e.g. SAS) must emit this shape.
 
 Transpose op (minimal subset)
 - Op name: `transpose`
@@ -90,19 +92,13 @@ Format op (minimal subset)
 - Semantics:
   - Registers a format mapping for `put()` calls in expressions.
 
-Summary op (minimal subset)
-- Op name: `summary`
-- Params:
-  - `class`: list of grouping keys
-  - `vars`: list of numeric columns to aggregate
-  - `stat`: `"mean"` only
-  - `autoname`: bool (true => `<var>_mean` output)
-- Semantics:
-  - Groups by CLASS keys and emits mean per VAR.
-  - Output rows are ordered by class keys for determinism.
+Summary (frontend-only)
+- `summary` is not a canonical op. If present in a frontend (e.g. PROC SUMMARY), it lowers to `aggregate` with canonical `group_by` and `metrics`. See IR_CANON_RULES.md and frontend lowering.
 
 Validator invariants (summary)
+- validate() is pure: it does not mutate step.params.
+- Only canonical param shapes are allowed; legacy shapes are refused at ingress (see IR_CANON_RULES.md), not normalized in validate().
 - No use of undefined input tables.
 - No output table collisions.
-- `sort` requires explicit `by` list.
+- `sort` requires explicit `by` list (canonical: list[{col, desc}]).
 - `data_step` with BY requires inputs sorted by the BY keys.
