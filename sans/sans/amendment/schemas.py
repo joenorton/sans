@@ -219,8 +219,14 @@ class RemoveStepOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "RemoveStepOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("remove_step requires step_id or transform_id or table")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("remove_step requires step_id or transform_id")
+        if self.selector.table is not None:
+            raise ValueError("remove_step does not allow selector.table")
+        if self.selector.path is not None:
+            raise ValueError("remove_step does not allow selector.path")
+        if self.selector.assertion_id is not None:
+            raise ValueError("remove_step does not allow selector.assertion_id")
         return self
 
 
@@ -231,8 +237,14 @@ class ReplaceStepOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "ReplaceStepOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("replace_step requires step selector")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("replace_step requires step_id or transform_id")
+        if self.selector.table is not None:
+            raise ValueError("replace_step does not allow selector.table")
+        if self.selector.path is not None:
+            raise ValueError("replace_step does not allow selector.path")
+        if self.selector.assertion_id is not None:
+            raise ValueError("replace_step does not allow selector.assertion_id")
         return self
 
 
@@ -243,8 +255,14 @@ class RewireInputsOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "RewireInputsOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("rewire_inputs requires step selector")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("rewire_inputs requires step_id or transform_id")
+        if self.selector.table is not None:
+            raise ValueError("rewire_inputs does not allow selector.table")
+        if self.selector.path is not None:
+            raise ValueError("rewire_inputs does not allow selector.path")
+        if self.selector.assertion_id is not None:
+            raise ValueError("rewire_inputs does not allow selector.assertion_id")
         return self
 
 
@@ -255,8 +273,14 @@ class RewireOutputsOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "RewireOutputsOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("rewire_outputs requires step selector")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("rewire_outputs requires step_id or transform_id")
+        if self.selector.table is not None:
+            raise ValueError("rewire_outputs does not allow selector.table")
+        if self.selector.path is not None:
+            raise ValueError("rewire_outputs does not allow selector.path")
+        if self.selector.assertion_id is not None:
+            raise ValueError("rewire_outputs does not allow selector.assertion_id")
         return self
 
 
@@ -273,10 +297,14 @@ class SetParamsOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "SetParamsOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("set_params requires step selector")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("set_params requires step_id or transform_id")
         if self.selector.path is None:
             raise ValueError("set_params requires selector.path")
+        if self.selector.table is not None:
+            raise ValueError("set_params does not allow selector.table")
+        if self.selector.assertion_id is not None:
+            raise ValueError("set_params does not allow selector.assertion_id")
         return self
 
 
@@ -287,10 +315,14 @@ class ReplaceExprOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "ReplaceExprOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("replace_expr requires step selector")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("replace_expr requires step_id or transform_id")
         if self.selector.path is None:
             raise ValueError("replace_expr requires selector.path")
+        if self.selector.table is not None:
+            raise ValueError("replace_expr does not allow selector.table")
+        if self.selector.assertion_id is not None:
+            raise ValueError("replace_expr does not allow selector.assertion_id")
         return self
 
 
@@ -301,10 +333,14 @@ class EditExprOpV1(BaseOpV1):
 
     @model_validator(mode="after")
     def validate_selector(self) -> "EditExprOpV1":
-        if not any([self.selector.step_id, self.selector.transform_id, self.selector.table]):
-            raise ValueError("edit_expr requires step selector")
+        if not any([self.selector.step_id, self.selector.transform_id]):
+            raise ValueError("edit_expr requires step_id or transform_id")
         if self.selector.path is None:
             raise ValueError("edit_expr requires selector.path")
+        if self.selector.table is not None:
+            raise ValueError("edit_expr does not allow selector.table")
+        if self.selector.assertion_id is not None:
+            raise ValueError("edit_expr does not allow selector.assertion_id")
         return self
 
 

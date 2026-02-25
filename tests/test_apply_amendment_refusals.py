@@ -278,3 +278,19 @@ def test_refusal_emits_exactly_one_payload():
     assert result.status == "refused"
     assert len(result.diagnostics["refusals"]) == 1
 
+
+def test_no_op_mutation_refused():
+    """set_params setting a leaf to the same value produces no change -> E_AMEND_NO_OP."""
+    ir = _base_ir()
+    # out:t2 has params.assignments[0].expr.value == 2
+    op = {
+        "op_id": "op1",
+        "kind": "set_params",
+        "selector": {"step_id": "out:t2", "path": "/assignments/0/expr/value"},
+        "params": {"value": 2},
+    }
+    result = apply_amendment(ir, _req_with_op(op))
+    assert result.status == "refused"
+    assert _code(result) == "E_AMEND_NO_OP"
+    assert result.ir_out is None
+

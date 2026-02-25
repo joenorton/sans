@@ -210,3 +210,66 @@ def test_structural_diff_transforms_minimal_truth():
     assert result_added.status == "ok"
     assert result_added.diff_structural["affected"]["transforms_added"]
 
+
+def _blast_chain_ir() -> dict:
+    """Minimal chain: ds->s1->t1, s2->t2, s3->t3; s2 consumes t1, s3 consumes t2. Ends with save."""
+    return {
+        "version": "0.1",
+        "datasources": {"x": {"kind": "csv", "path": "x.csv"}},
+        "steps": [
+            {"id": "ds:x", "op": "datasource", "inputs": [], "outputs": ["__datasource__x"], "params": {"name": "x", "kind": "csv", "path": "x.csv"}},
+            {"id": "s1", "op": "compute", "inputs": ["__datasource__x"], "outputs": ["t1"], "params": {"assignments": [{"target": "a", "expr": {"type": "lit", "value": 1}}]}},
+            {"id": "s2", "op": "identity", "inputs": ["t1"], "outputs": ["t2"], "params": {}},
+            {"id": "s3", "op": "identity", "inputs": ["t2"], "outputs": ["t3"], "params": {}},
+            {"id": "save:t3", "op": "save", "inputs": ["t3"], "outputs": [], "params": {"path": "out.csv"}},
+        ],
+    }
+
+
+def test_blast_radius_direct_and_downstream_set_params_on_s1():
+    ir = _blast_chain_ir()
+    op = {
+        "op_id": "op1",
+        "kind": "set_params",
+        "selector": {"step_id": "s1", "path": "/assignments/0/expr/value"},
+        "params": {"value": 10},
+    }
+    result = apply_amendment(ir, _req_with_op(op))
+    assert result.status == "ok"
+    affected = result.diff_structural["affected"]
+    assert affected["blast_radius_direct"]["steps"] == ["s1"]
+    assert affected["blast_radius_direct"]["tables"] == ["t1"]
+    assert set(affected["blast_radius_downstream"]["steps"]) == {"s2", "s3", "save:t3"}
+    assert set(affected["blast_radius_downstream"]["tables"]) == {"t2", "t3"}
+    touched = affected["touched"]
+    assert len(touched) == 1
+    assert touched[0]["op_id"] == "op1"
+    assert touched[0]["kind"] == "set_params"
+    assert touched[0]["step_id"] == "s1"
+    assert touched[0]["path"] == "/assignments/0/expr/value"
+
+
+def test_blast_radius_add_step_updates_downstream_closure():
+    ir = _blast_chain_ir()
+    op = {
+        "op_id": "op1",
+        "kind": "add_step",
+        "selector": {"after_step_id": "s1"},
+        "params": {
+            "step": {
+                "id": "s_new",
+                "op": "identity",
+                "inputs": ["t1"],
+                "outputs": ["t_new"],
+                "params": {},
+            }
+        },
+    }
+    result = apply_amendment(ir, _req_with_op(op))
+    assert result.status == "ok"
+    affected = result.diff_structural["affected"]
+    assert "s_new" in affected["blast_radius_direct"]["steps"]
+    assert "t_new" in affected["blast_radius_direct"]["tables"]
+    touched = affected["touched"]
+    assert any(t["step_id"] == "s_new" and t["kind"] == "add_step" for t in touched)
+

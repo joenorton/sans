@@ -144,3 +144,87 @@ def test_schema_selector_path_invalid_escape_refused():
     assert result.status == "refused"
     assert _refusal_code(result) == "E_AMEND_VALIDATION_SCHEMA"
 
+
+def test_schema_set_params_selector_table_refused():
+    """selector.table not allowed for set_params; requires step_id or transform_id."""
+    req = {
+        "format": "sans.amendment_request",
+        "version": 1,
+        "contract_version": "0.1",
+        "policy": {},
+        "ops": [
+            {
+                "op_id": "op1",
+                "kind": "set_params",
+                "selector": {"table": "t1", "path": "/"},
+                "params": {"value": {}},
+            }
+        ],
+    }
+    result = apply_amendment(_base_ir(), req)
+    assert result.status == "refused"
+    assert _refusal_code(result) == "E_AMEND_VALIDATION_SCHEMA"
+
+
+def test_schema_rewire_inputs_selector_path_refused():
+    """selector.path not allowed for rewire_inputs."""
+    req = {
+        "format": "sans.amendment_request",
+        "version": 1,
+        "contract_version": "0.1",
+        "policy": {},
+        "ops": [
+            {
+                "op_id": "op1",
+                "kind": "rewire_inputs",
+                "selector": {"step_id": "out:t1", "path": "/x"},
+                "params": {"inputs": ["t1"]},
+            }
+        ],
+    }
+    result = apply_amendment(_base_ir(), req)
+    assert result.status == "refused"
+    assert _refusal_code(result) == "E_AMEND_VALIDATION_SCHEMA"
+
+
+def test_schema_rewire_inputs_selector_assertion_id_refused():
+    """selector.assertion_id not allowed for rewire_inputs."""
+    req = {
+        "format": "sans.amendment_request",
+        "version": 1,
+        "contract_version": "0.1",
+        "policy": {},
+        "ops": [
+            {
+                "op_id": "op1",
+                "kind": "rewire_inputs",
+                "selector": {"step_id": "out:t1", "assertion_id": "a1"},
+                "params": {"inputs": ["t1"]},
+            }
+        ],
+    }
+    result = apply_amendment(_base_ir(), req)
+    assert result.status == "refused"
+    assert _refusal_code(result) == "E_AMEND_VALIDATION_SCHEMA"
+
+
+def test_schema_remove_step_selector_table_only_refused():
+    """selector.table not allowed for remove_step; requires step_id or transform_id."""
+    req = {
+        "format": "sans.amendment_request",
+        "version": 1,
+        "contract_version": "0.1",
+        "policy": {"allow_destructive": True},
+        "ops": [
+            {
+                "op_id": "op1",
+                "kind": "remove_step",
+                "selector": {"table": "t1"},
+                "params": {},
+            }
+        ],
+    }
+    result = apply_amendment(_base_ir(), req)
+    assert result.status == "refused"
+    assert _refusal_code(result) == "E_AMEND_VALIDATION_SCHEMA"
+
