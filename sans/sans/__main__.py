@@ -17,6 +17,7 @@ from . import __version__ as _engine_version
 from .ir.adapter import sans_ir_to_irdoc
 from .ir.normalize import irdoc_to_sans_ir
 from .ir.schema import validate_sans_ir, canonical_json_dumps
+from .amendment import apply_amendment
 from .sans_script import irdoc_to_expanded_sans
 
 
@@ -291,6 +292,11 @@ def main(argv: list[str] | None = None) -> int:
     ir_validate_parser = subparsers.add_parser("ir-validate", help="Validate sans.ir structure only")
     ir_validate_parser.add_argument("script", help="Path to the sans.ir file")
     ir_validate_parser.add_argument("--strict", action="store_true", default=False, help="Treat structural warnings as errors")
+
+    ir_amend_parser = subparsers.add_parser("ir-amend", help="Apply an amendment request to sans.ir")
+    ir_amend_parser.add_argument("--ir", required=True, help="Path to input sans.ir json")
+    ir_amend_parser.add_argument("--req", required=True, help="Path to amendment request json")
+    ir_amend_parser.add_argument("--out", required=True, help="Path to write mutation result json")
 
     schema_lock_parser = subparsers.add_parser("schema-lock", help="Generate schema.lock.json without execution (no --out required)")
     schema_lock_parser.add_argument("script", help="Path to the script file")
@@ -833,6 +839,37 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("ok: valid sans.ir", file=sys.stderr)
         return 0
+
+    if args.command == "ir-amend":
+        ir_path = Path(args.ir)
+        req_path = Path(args.req)
+        out_path = Path(args.out)
+        try:
+            ir_in = json.loads(ir_path.read_text(encoding="utf-8"))
+            req = json.loads(req_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"failed: invalid json input: {exc}")
+            return 2
+
+        result = apply_amendment(ir_in, req)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "status": result.status,
+            "diagnostics": result.diagnostics,
+            "diff_structural": result.diff_structural,
+            "diff_assertions": result.diff_assertions,
+        }
+        if result.status == "ok":
+            payload["ir_out"] = result.ir_out
+        out_path.write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        if result.status == "ok":
+            print(f"ok: wrote {out_path}")
+            return 0
+        print(f"refused: {result.diagnostics.get('refusals', [{}])[0].get('code', 'unknown')}")
+        return 1
 
     if args.command == "schema-lock":
         from .runtime import generate_schema_lock_standalone
