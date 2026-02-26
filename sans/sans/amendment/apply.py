@@ -12,6 +12,7 @@ from .diff import (
     build_diagnostics,
     build_structural_diff,
     build_table_universe,
+    canonical_sha256,
     derive_transform_id,
 )
 from .errors import (
@@ -21,6 +22,7 @@ from .errors import (
     E_AMEND_EXPR_INVALID,
     E_AMEND_INDEX_OUT_OF_RANGE,
     E_AMEND_IR_INVALID,
+    E_AMEND_NO_OP,
     E_AMEND_OUTPUT_TABLE_COLLISION,
     E_AMEND_PATH_INVALID,
     E_AMEND_PATH_NOT_FOUND,
@@ -385,6 +387,7 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
     ops_applied: List[Dict[str, Any]] = []
     affected_steps: List[str] = []
     affected_tables: List[str] = []
+    touched: List[Dict[str, Any]] = []
 
     for op in request.ops:
         if op.kind == "add_step":
@@ -456,6 +459,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
 
             affected_steps.append(new_step["id"])
             affected_tables.extend(new_step.get("outputs", []))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": new_step["id"],
+                "table": None,
+                "path": None,
+            })
 
         elif op.kind == "remove_step":
             if not request.policy.allow_destructive:
@@ -469,6 +479,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             removed = steps.pop(step_idx)
             affected_steps.append(removed.get("id", ""))
             affected_tables.extend(removed.get("outputs", []))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": removed.get("id"),
+                "table": getattr(op.selector, "table", None),
+                "path": getattr(op.selector, "path", None),
+            })
 
         elif op.kind == "replace_step":
             step_idx, refused = _resolve_single_step_index(steps, op.selector)
@@ -505,6 +522,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             steps[step_idx] = updated
             affected_steps.append(updated.get("id", ""))
             affected_tables.extend(updated.get("outputs", []))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": updated.get("id"),
+                "table": getattr(op.selector, "table", None),
+                "path": getattr(op.selector, "path", None),
+            })
 
         elif op.kind == "rewire_inputs":
             step_idx, refused = _resolve_single_step_index(steps, op.selector)
@@ -512,6 +536,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
                 return refused
             steps[step_idx]["inputs"] = copy.deepcopy(op.params.inputs)
             affected_steps.append(steps[step_idx].get("id", ""))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": steps[step_idx].get("id"),
+                "table": getattr(op.selector, "table", None),
+                "path": getattr(op.selector, "path", None),
+            })
 
         elif op.kind == "rewire_outputs":
             if not request.policy.allow_output_rewire:
@@ -533,6 +564,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             steps[step_idx]["outputs"] = copy.deepcopy(op.params.outputs)
             affected_steps.append(steps[step_idx].get("id", ""))
             affected_tables.extend(op.params.outputs)
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": steps[step_idx].get("id"),
+                "table": getattr(op.selector, "table", None),
+                "path": getattr(op.selector, "path", None),
+            })
 
         elif op.kind == "rename_table":
             old_name = op.selector.table
@@ -543,12 +581,21 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             if new_name in universe:
                 return _refused(E_AMEND_OUTPUT_TABLE_COLLISION, "rename_table target already exists")
             for step in steps:
+                if old_name in (step.get("inputs") or []) or old_name in (step.get("outputs") or []):
+                    affected_steps.append(step.get("id", ""))
                 step["inputs"] = [new_name if name == old_name else name for name in step.get("inputs", [])]
                 step["outputs"] = [new_name if name == old_name else name for name in step.get("outputs", [])]
             for assertion in assertions:
                 if assertion.get("table") == old_name:
                     assertion["table"] = new_name
             affected_tables.extend([old_name, new_name])
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": None,
+                "table": old_name,
+                "path": None,
+            })
 
         elif op.kind == "set_params":
             step_idx, refused = _resolve_single_step_index(steps, op.selector)
@@ -589,6 +636,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
                 )
             step["params"] = updated_params
             affected_steps.append(step.get("id", ""))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": step.get("id"),
+                "table": None,
+                "path": op.selector.path,
+            })
 
         elif op.kind == "replace_expr":
             step_idx, refused = _resolve_single_step_index(steps, op.selector)
@@ -608,6 +662,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
                 return _refused(E_AMEND_PATH_INVALID, "selector.path traverses invalid type")
             step["params"] = updated_params
             affected_steps.append(step.get("id", ""))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": step.get("id"),
+                "table": None,
+                "path": op.selector.path,
+            })
 
         elif op.kind == "edit_expr":
             step_idx, refused = _resolve_single_step_index(steps, op.selector)
@@ -650,6 +711,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             else:
                 parent[key] = edited
             affected_steps.append(step.get("id", ""))
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": step.get("id"),
+                "table": None,
+                "path": op.selector.path,
+            })
 
         elif op.kind == "add_assertion":
             assertion_payload = copy.deepcopy(op.params.assertion.model_dump(exclude_none=True))
@@ -670,6 +738,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             assertion_payload["table"] = op.selector.table
             assertions.append(assertion_payload)
             affected_tables.append(op.selector.table)
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": None,
+                "table": op.selector.table,
+                "path": None,
+            })
 
         elif op.kind == "remove_assertion":
             if not request.policy.allow_destructive:
@@ -684,6 +759,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             except RuntimeError:
                 return _refused(E_AMEND_TARGET_AMBIGUOUS, "assertion_id matched multiple assertions")
             assertions.pop(assertion_idx)
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": None,
+                "table": None,
+                "path": None,
+            })
 
         elif op.kind == "replace_assertion":
             payload = copy.deepcopy(op.params.assertion.model_dump(exclude_none=True))
@@ -699,6 +781,13 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             except RuntimeError:
                 return _refused(E_AMEND_TARGET_AMBIGUOUS, "assertion_id matched multiple assertions")
             assertions[assertion_idx] = payload
+            touched.append({
+                "op_id": op.op_id,
+                "kind": op.kind,
+                "step_id": None,
+                "table": None,
+                "path": None,
+            })
 
         else:
             return _refused("E_AMEND_CAPABILITY_UNSUPPORTED", f"unsupported op kind: {op.kind}")
@@ -714,6 +803,9 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
             meta=_ir_validation_meta(exc),
         )
 
+    if canonical_sha256(ir_in) == canonical_sha256(work):
+        return _refused(E_AMEND_NO_OP, "mutation produced no changes")
+
     assertions_after = copy.deepcopy(assertions)
     diff_structural = build_structural_diff(
         ir_in=ir_in,
@@ -721,6 +813,7 @@ def apply_amendment(ir_in: SansIR, req: AmendmentRequestV1 | Dict[str, Any]) -> 
         ops_applied=ops_applied,
         affected_steps=affected_steps,
         affected_tables=affected_tables,
+        touched=touched,
     )
     diff_assertions = build_assertion_diff(assertions_before, assertions_after)
     diagnostics = build_diagnostics(status="ok", refusals=[], warnings=[])

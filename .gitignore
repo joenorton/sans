@@ -5,6 +5,7 @@ pytest-cache-files-*/
 __pycache__/
 .benchmarks/
 .tmp_pytest
+.venv311/
 
 # builds
 dist/
